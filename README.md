@@ -1,2 +1,2 @@
 # Pandora-editor
-A modding tool for Goldeneye: Rogue Agent DS
+A vibe coded modding tool for Goldeneye: Rogue Agent DS
