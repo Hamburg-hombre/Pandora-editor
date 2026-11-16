@@ -10,7 +10,8 @@ Setup
 
 Workflow
   - Pick your .nds, click "Unpack ROM", browse the files on the left.
-  - .nsbmd = models, .nsbtx = shared textures, .cvhm = collision, .txt = text (now editable).
+  - .nsbmd = models, .nsbtx = shared textures, .cvhm = collision, .roo = room boxes (now editable),
+    .txt = text (now editable).
   - Edit, then "Repack ROM..." writes a new .nds. The first edit of any file keeps a copy in
     <work folder>/_backup ; "Revert file to original" restores it.
 
@@ -76,12 +77,32 @@ Collision (Model tab, .cvhm files)
   If several .CVHM files belong to one room, repeat for each. Collision does not need to look good,
   it only has to follow the floor/walls you can reach.
 
+Rooms (Rooms tab, Global.ROO)
+  Each level folder has a Global.ROO next to its models: one box per room, in the same level
+  coordinates as the models and collision. The game only runs collision while the player is inside
+  the room's box, so the box decides where you can walk - that is why a bigger collision model needs
+  a bigger box.
+  - Select a Global.ROO in the list on the left. The view under the table (and the Model tab) shows
+    every box as a wireframe (yellow = selected room, blue = the others) with the room names;
+    drag = rotate, wheel = zoom.
+  - The table lists every room with its flags and Min/Max X/Y/Z. Pick a room (or double-click a row),
+    edit the six values under the table and click "Apply box and save".
+  - Apply writes the file straight away; the first change keeps the original under
+    <work folder>/_backup, and "Revert file to original" restores it. Room names and flags are not
+    touched.
+  - "Zoom to room" frames one box, "Show all rooms" returns to the whole level.
+  - Make a box at least as big as the walkable part of the room. Growing a box is always safe;
+    shrinking it can make collision stop working in that room.
+  - Repack the ROM to test it.
+
 If something looks wrong
   - Some parts turn/spin with the camera: those shapes sit under billboard ("BB") nodes. Redo the
     replacement with "Turn off billboard nodes" ticked.
   - Collision stops working past the edge of your new model: generate the collision again for that
     .CVHM (the tool then also grows the room box in Global.ROO). If you only replaced the .nsbmd,
     the .CVHM was not touched at all.
+  - Collision works only in part of a room: the room box in Global.ROO is too small for the new
+    geometry. Open that level's Global.ROO in the Rooms tab and grow the matching room's box.
   - The replaced model still shows the old textures: the log line says how many textures were imported
     and into which file. If it says "no texture was imported", the OBJ itself does not carry usable
     images: the .mtl must be next to the .obj, must contain "map_Kd <image>" lines, and those images

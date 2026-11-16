@@ -199,8 +199,8 @@ def bounds(tris):
     return c, r
 
 
-def project(tris, center, radius, yaw, pitch, zoom, w, h, step=1):
-    """Return [(depth, [x1,y1,x2,y2,x3,y3], shade 0..1)] sorted far -> near."""
+def _camera(center, radius, yaw, pitch, zoom, w, h):
+    """Shared 3D -> 2D transform for the preview canvas.  Returns (tf, screen)."""
     cy, sy_ = math.cos(yaw), math.sin(yaw)
     cp, sp = math.cos(pitch), math.sin(pitch)
     scale = zoom * min(w, h) / (2.2 * radius)
@@ -214,6 +214,16 @@ def project(tris, center, radius, yaw, pitch, zoom, w, h, step=1):
         z3 = y * sp + z2 * cp
         return x2, y2, z3
 
+    def screen(p):
+        return w / 2 + p[0] * scale, h / 2 - p[1] * scale
+
+    return tf, screen
+
+
+def project(tris, center, radius, yaw, pitch, zoom, w, h, step=1):
+    """Return [(depth, [x1,y1,x2,y2,x3,y3], shade 0..1)] sorted far -> near."""
+    tf, screen = _camera(center, radius, yaw, pitch, zoom, w, h)
+
     out = []
     for i in range(0, len(tris), step):
         a, b, c = (tf(v) for v in tris[i])
@@ -224,10 +234,31 @@ def project(tris, center, radius, yaw, pitch, zoom, w, h, step=1):
         shade = 0.3 + 0.7 * (abs(nz / ln) if ln else 0.5)
         pts = []
         for p in (a, b, c):
-            pts += [w / 2 + p[0] * scale, h / 2 - p[1] * scale]
+            pts += list(screen(p))
         out.append(((a[2] + b[2] + c[2]) / 3, pts, shade))
     out.sort(key=lambda t: t[0])
     return out
+
+
+def box_edges(box):
+    """The 12 edges of an axis-aligned box stored as [x0, y0, z0, x1, y1, z1]."""
+    x0, y0, z0, x1, y1, z1 = box
+    c = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+         (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+    return [(c[a], c[b]) for a, b in ((0, 1), (1, 2), (2, 3), (3, 0),
+                                      (4, 5), (5, 6), (6, 7), (7, 4),
+                                      (0, 4), (1, 5), (2, 6), (3, 7))]
+
+
+def boxes_bounds(boxes):
+    """Center/radius of a list of [x0, y0, z0, x1, y1, z1] boxes, for the 3D view."""
+    if not boxes:
+        return (0, 0, 0), 1.0
+    lo = [min(b[k] for b in boxes) for k in range(3)]
+    hi = [max(b[k + 3] for b in boxes) for k in range(3)]
+    center = tuple((lo[k] + hi[k]) / 2 for k in range(3))
+    radius = max(hi[k] - lo[k] for k in range(3)) / 2 or 1.0
+    return center, radius
 
 
 def texture_image(tex, pal):
@@ -399,6 +430,10 @@ if tk is not None:
             self.busy = False
             self.loaded = None
             self.collision = None
+            self.roo = None
+            self.roo_room = None
+            self.roo_base_view = None
+            self.room_vars = [tk.StringVar() for _ in range(6)]
             self.view_tris = []
             self.cur_path = None
             self.tree_paths = {}
@@ -406,6 +441,7 @@ if tk is not None:
             self.drag = None
             self.view = None
             self.photo = None
+            self.room_canvas = None
             self._last_tex = None
             self.text_path = None
             self.text_info = None
@@ -533,6 +569,64 @@ if tk is not None:
             xsb.pack(side='right', fill='y')
             self.text.bind('<<Modified>>', self.on_text_modified)
             self.text.bind('<Control-s>', lambda e: (self.save_text(), 'break')[1])
+
+            # ---- rooms tab (.roo / Global.ROO)
+            rt = ttk.Frame(self.nb)
+            self.nb.add(rt, text='Rooms (.ROO)')
+            rbar = ttk.Frame(rt)
+            rbar.pack(fill='x')
+            ttk.Button(rbar, text='Show all rooms', command=self.show_all_rooms).pack(side='left')
+            ttk.Button(rbar, text='Zoom to room', command=self.zoom_room).pack(side='left', padx=4)
+            self.rooms_hint = tk.StringVar(
+                value='Open a level\'s Global.ROO in the list on the left to see and edit its room boxes.')
+            ttk.Label(rt, textvariable=self.rooms_hint, foreground='#606060', wraplength=780,
+                      justify='left').pack(anchor='w', pady=(4, 4))
+            rf = ttk.PanedWindow(rt, orient='vertical')
+            rf.pack(fill='both', expand=True)
+            tablef = ttk.Frame(rf)
+            rf.add(tablef, weight=3)
+            cols = ('idx', 'name', 'flags', 'x0', 'y0', 'z0', 'x1', 'y1', 'z1', 'size')
+            heads = ('#', 'room', 'flags', 'min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z', 'size (X x Y x Z)')
+            widths = (34, 130, 52, 66, 66, 66, 66, 66, 66, 150)
+            self.room_tree = ttk.Treeview(tablef, columns=cols, show='headings', selectmode='browse', height=8)
+            for c, hd, wd in zip(cols, heads, widths):
+                self.room_tree.heading(c, text=hd)
+                self.room_tree.column(c, width=wd, stretch=False, anchor='w' if c == 'name' else 'center')
+            rsb = ttk.Scrollbar(tablef, command=self.room_tree.yview)
+            self.room_tree.configure(yscrollcommand=rsb.set)
+            self.room_tree.pack(side='left', fill='both', expand=True)
+            rsb.pack(side='right', fill='y')
+            self.room_tree.bind('<<TreeviewSelect>>', self.on_room_select)
+            self.room_entries = []
+            viewf = ttk.Frame(rf)
+            rf.add(viewf, weight=2)
+            self.room_canvas = tk.Canvas(viewf, background='#202428', highlightthickness=0, height=230)
+            self.room_canvas.pack(fill='both', expand=True)
+            self.room_canvas.bind('<ButtonPress-1>', self.on_press)
+            self.room_canvas.bind('<B1-Motion>', self.on_drag)
+            self.room_canvas.bind('<ButtonRelease-1>', self.on_release)
+            self.room_canvas.bind('<MouseWheel>', self.on_wheel)
+            self.room_canvas.bind('<Button-4>', lambda e: self.zoom_by(1.1))
+            self.room_canvas.bind('<Button-5>', lambda e: self.zoom_by(1 / 1.1))
+            self.room_canvas.bind('<Configure>', lambda e: self.redraw())
+            ef = ttk.LabelFrame(rt, text=' Selected room box (level units, stored with 1/4096 precision) ',
+                                padding=6)
+            ef.pack(fill='x', pady=(6, 0))
+            for k, ax in enumerate(('X', 'Y', 'Z')):
+                ttk.Label(ef, text=ax).grid(row=0, column=k + 1)
+            ttk.Label(ef, text='Min').grid(row=1, column=0, sticky='e', padx=(0, 6))
+            ttk.Label(ef, text='Max').grid(row=2, column=0, sticky='e', padx=(0, 6))
+            for i in range(6):
+                ent = ttk.Entry(ef, textvariable=self.room_vars[i], width=13)
+                ent.grid(row=1 + i // 3, column=1 + i % 3, padx=3, pady=2, sticky='w')
+                self.room_entries.append(ent)
+            self.room_tree.bind('<Double-1>', lambda e: self.room_entries[0].focus_set())
+            ttk.Button(ef, text='Apply box and save', command=self.apply_room_box).grid(
+                row=1, column=4, rowspan=2, padx=(10, 0))
+            ttk.Label(ef, foreground='#606060', text=(
+                'The game only runs collision inside the room the player is in, so a box must contain the '
+                'walkable area. "Apply" writes the file (a backup is kept); Repack the ROM to test it.'),
+                wraplength=780, justify='left').grid(row=3, column=0, columnspan=5, sticky='w', pady=(4, 0))
 
             # ---- log
             lf = ttk.Frame(self, padding=(6, 4))
@@ -672,6 +766,9 @@ if tk is not None:
                 return
             if not self._confirm_discard_text():
                 return
+            if self._room_dirty() and not messagebox.askyesno(
+                    'Rooms', 'Discard the room box values you typed but did not save?'):
+                return
             self.load_path(self.tree_paths[sel[0]])
 
         def _confirm_discard_text(self):
@@ -689,9 +786,18 @@ if tk is not None:
             self.cur_path = path
             self.loaded = None
             self.collision = None
+            self.roo = None
+            self.roo_room = None
+            self.roo_base_view = None
+            self.room_tree.delete(*self.room_tree.get_children())
+            self.rooms_hint.set('Open a level\'s Global.ROO in the list on the left to see and edit its room boxes.')
+            for v in self.room_vars:
+                v.set('')
             self.view_tris = []
             self._last_tex = None
             self.canvas.delete('all')
+            if self.room_canvas is not None:
+                self.room_canvas.delete('all')
             self.texlist.delete(0, 'end')
             self.tex_canvas.delete('all')
             self.pal_box['values'] = ()
@@ -727,6 +833,26 @@ if tk is not None:
                 self.info.set('%s  -  collision v%d, %d triangle(s)  -  %s'
                               % (name, col.version, len(self.view_tris), parts))
                 self.nb.select(0)
+                self.reset_view()
+                return
+            if low.endswith('.roo'):
+                try:
+                    roo = collision.Roo(open(path, 'rb').read(), path)
+                except Exception as e:
+                    self.info.set('%s: not a level room table (%s)' % (name, e))
+                    return
+                self.roo = roo
+                self.roo_room = 0 if roo.rooms else None
+                self.roo_base_view = boxes_bounds([r['box'] for r in roo.rooms])
+                self.view = self.roo_base_view
+                self.fill_rooms()
+                self.rooms_hint.set(
+                    '%s: %d room box(es). Pick a room, then edit its Min/Max values below. The game only '
+                    'runs collision inside the room the player is in, so each box has to contain the '
+                    'walkable area of that room.' % (name, roo.room_count))
+                self.info.set('%s  -  %d room box(es), room table version %d'
+                              % (name, roo.room_count, roo.version))
+                self.nb.select(3)
                 self.reset_view()
                 return
             if not (low.endswith('.nsbmd') or low.endswith('.nsbtx')):
@@ -810,9 +936,114 @@ if tk is not None:
                 return
             self.load_path(self.text_path)
 
+        # ------------------------------------------------------------ rooms view
+        def fill_rooms(self):
+            tree = self.room_tree
+            tree.delete(*tree.get_children())
+            roo = self.roo
+            if not roo:
+                return
+            for room in roo.rooms:
+                b = room['box']
+                tree.insert('', 'end', iid=str(room['index']), values=(
+                    room['index'], room['name'] or '(unnamed)', '0x%03x' % room['flags'],
+                    '%.2f' % b[0], '%.2f' % b[1], '%.2f' % b[2],
+                    '%.2f' % b[3], '%.2f' % b[4], '%.2f' % b[5],
+                    '%.1f x %.1f x %.1f' % (b[3] - b[0], b[4] - b[1], b[5] - b[2])))
+            if self.roo_room is None and roo.rooms:
+                self.roo_room = 0
+            if self.roo_room is not None:
+                tree.selection_set(str(self.roo_room))
+                tree.see(str(self.roo_room))
+                self._load_room_vars(self.roo_room)
+
+        def _load_room_vars(self, idx):
+            b = self.roo.rooms[idx]['box']
+            for i in range(6):
+                self.room_vars[i].set('%.3f' % b[i])
+
+        def _room_entry_vals(self):
+            try:
+                return [float(v.get().strip().replace(',', '.')) for v in self.room_vars]
+            except ValueError:
+                return None
+
+        def _room_dirty(self):
+            if self.roo is None or self.roo_room is None:
+                return False
+            vals = self._room_entry_vals()
+            if vals is None:
+                return True
+            return any(abs(vals[i] - self.roo.rooms[self.roo_room]['box'][i]) > 0.002 for i in range(6))
+
+        def on_room_select(self, _e=None):
+            sel = self.room_tree.selection()
+            if not sel or self.roo is None:
+                return
+            idx = int(sel[0])
+            if idx >= len(self.roo.rooms):
+                return
+            if idx != self.roo_room and self._room_dirty():
+                room = self.roo.rooms[self.roo_room]
+                if not messagebox.askyesno('Rooms', 'Discard the box values you typed for room %s without '
+                                           'saving them?' % (room['name'] or self.roo_room)):
+                    self.room_tree.selection_set(str(self.roo_room))
+                    self._load_room_vars(self.roo_room)
+                    return
+            self.roo_room = idx
+            self._load_room_vars(idx)
+            self.redraw()
+
+        def apply_room_box(self):
+            roo, idx = self.roo, self.roo_room
+            if roo is None or idx is None:
+                return messagebox.showinfo('Rooms', 'Select a level\'s Global.ROO file and one of its rooms first.')
+            vals = self._room_entry_vals()
+            if vals is None:
+                return messagebox.showerror('Rooms', 'Every box value must be a number (level units, e.g. -12.5).')
+            bmin, bmax = vals[:3], vals[3:]
+            if any(bmin[k] > bmax[k] for k in range(3)):
+                return messagebox.showerror('Rooms', 'Each Min value has to be smaller than the matching Max value.')
+            if any(abs(v) > 1e6 for v in vals):
+                return messagebox.showerror('Rooms', 'Those coordinates are far outside the level (limit 1,000,000).')
+            room = roo.rooms[idx]
+            work = self.work_var.get().strip()
+            if not roo.set_box(idx, bmin, bmax):
+                self._load_room_vars(idx)
+                return self.log('room %s: box unchanged' % (room['name'] or idx))
+            try:
+                backup_file(work, roo.path)
+                roo.write()
+            except Exception as e:
+                return messagebox.showerror('Rooms', 'Could not save the room box:\n%s' % e)
+            b = room['box']
+            self.fill_rooms()
+            self.btn_revert.configure(state='normal' if self._has_backup(roo.path) else 'disabled')
+            self.redraw()
+            self.log('room %s (%s): box set to [%.2f, %.2f, %.2f] .. [%.2f, %.2f, %.2f]'
+                     % (room['name'] or '(unnamed)', os.path.basename(roo.path),
+                        b[0], b[1], b[2], b[3], b[4], b[5]))
+            self.log('Repack the ROM to test it. "Revert file to original" restores the old boxes.')
+
+        def show_all_rooms(self):
+            if self.roo is None:
+                return
+            self.view = self.roo_base_view or self.view
+            self.yaw, self.pitch, self.zoom = 0.6, 0.35, 1.0
+            self.redraw()
+
+        def zoom_room(self):
+            if self.roo is None or self.roo_room is None:
+                return
+            self.view = boxes_bounds([self.roo.rooms[self.roo_room]['box']])
+            self.yaw, self.pitch, self.zoom = 0.6, 0.35, 1.0
+            self.redraw()
+
         # ------------------------------------------------------------ model view
         def reset_view(self):
             self.yaw, self.pitch, self.zoom = 0.6, 0.35, 1.0
+            if self.roo is not None and self.roo_base_view:
+                self.view = self.roo_base_view
             self.redraw()
 
         def zoom_by(self, f):
@@ -841,10 +1072,21 @@ if tk is not None:
         def redraw(self, fast=False):
             c = self.canvas
             c.delete('all')
+            w, h = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
+            if self.roo is not None:
+                self._draw_rooms(c, w, h)
+            else:
+                self._draw_tris(c, w, h, fast)
+            rc = getattr(self, 'room_canvas', None)
+            if rc is not None:
+                rc.delete('all')
+                if self.roo is not None:
+                    self._draw_rooms(rc, max(rc.winfo_width(), 50), max(rc.winfo_height(), 50))
+
+        def _draw_tris(self, c, w, h, fast=False):
             tris = self.view_tris
             if not tris:
                 return
-            w, h = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
             step = max(1, len(tris) // 2500) if fast else 1
             center, radius = self.view
             solid = self.solid.get() and len(tris) <= 12000
@@ -854,6 +1096,36 @@ if tk is not None:
                     c.create_polygon(pts, fill='#%02x%02x%02x' % (g, g, min(255, g + 12)), outline='')
                 else:
                     c.create_polygon(pts, fill='', outline='#8fd0ff')
+
+        def _draw_rooms(self, c, w, h):
+            """Wireframe of every room box of a Global.ROO, the selected one highlighted."""
+            roo = self.roo
+            if not roo or not roo.rooms:
+                return
+            center, radius = self.view
+            tf, screen = _camera(center, radius, self.yaw, self.pitch, self.zoom, w, h)
+            order = [r['index'] for r in roo.rooms if r['index'] != self.roo_room]
+            if self.roo_room is not None:
+                order.append(self.roo_room)          # selected box drawn last, on top
+            for idx in order:
+                room = roo.rooms[idx]
+                b = room['box']
+                sel = idx == self.roo_room
+                color = '#ffd24a' if sel else '#7fa8c9'
+                for p1, p2 in box_edges(b):
+                    x1, y1 = screen(tf(p1))
+                    x2, y2 = screen(tf(p2))
+                    c.create_line(x1, y1, x2, y2, fill=color, width=2 if sel else 1)
+                if room['name']:
+                    x0, y0 = screen(tf((b[0], b[1], b[2])))
+                    x1, y1 = screen(tf((b[3], b[4], b[5])))
+                    if sel or max(abs(x1 - x0), abs(y1 - y0)) > 60:
+                        mid = ((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2)
+                        sx, sy = screen(tf(mid))
+                        c.create_text(sx, sy, text=room['name'], fill=color, font=('TkDefaultFont', 8),
+                                      anchor='center')
+            c.create_text(8, max(8, h - 8), anchor='sw', fill='#9fb2c4', font=('TkDefaultFont', 8), text=(
+                'room boxes: yellow = selected, blue = others   -   drag = rotate, wheel = zoom'))
 
         # ------------------------------------------------------------ texture view
         def _current_tex(self):

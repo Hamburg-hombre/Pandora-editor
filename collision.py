@@ -658,6 +658,18 @@ class Roo:
             return None, ''
         return self.rooms[idx], 'position'
 
+    def set_box(self, index, bmin, bmax):
+        """Set room `index`'s box exactly (min xyz, max xyz).  True when it changed."""
+        room = self.rooms[index]
+        raw = [_roo_fixed(bmin[0]), _roo_fixed(bmin[1]), _roo_fixed(bmin[2]),
+               _roo_fixed_hi(bmax[0]), _roo_fixed_hi(bmax[1]), _roo_fixed_hi(bmax[2])]
+        if list(room['box_i']) == raw:
+            return False
+        struct.pack_into('<6i', self.data, room['box_offset'], *raw)
+        room['box_i'] = tuple(raw)
+        room['box'] = [_roo_unfixed(v) for v in raw]
+        return True
+
     def grow(self, index, bmin, bmax):
         """Grow room `index`'s box so it contains bmin..bmax.  True when it changed."""
         room = self.rooms[index]
