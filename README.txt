@@ -1,11 +1,11 @@
-GoldenEye: Rogue Agent (DS) Mod Tool
-====================================
+GoldenEye: Rogue Agent (DS) Pandora editor
+==========================================
 Setup
   1. Install Python 3.8+ from python.org (tick "Add python.exe to PATH"; it includes Tkinter).
   2. Open a command prompt and run:   pip install pillow numpy
-  3. Keep all the files from this zip in one folder and double-click  run_modtool.bat
-     (or run:  python ge_modtool.py).  If something is wrong the window stays open and
-     tells you what; errors are also saved to ge_modtool_error.log next to the tool.
+  3. Keep all the files from this zip in one folder and double-click  run_pandora_editor.bat
+     (or run:  python pandora_editor.py).  If something is wrong the window stays open and
+     tells you what; errors are also saved to pandora_editor_error.log next to the tool.
   numpy is only needed for the Import buttons; everything else works without it.
 
 Workflow

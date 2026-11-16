@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GoldenEye: Rogue Agent (DS) - Mod Tool GUI
-Run:  python ge_modtool.py
+GoldenEye: Rogue Agent (DS) - Pandora editor GUI
+Run:  python pandora_editor.py
 Needs: Python 3.8+, Pillow and numpy (pip install pillow numpy). Tkinter ships with Python on
 Windows/macOS (Linux: sudo apt install python3-tk).
 Keep this file in the same folder as nitro.py, scene.py, nitro_write.py, nds_unpack.py,
@@ -9,7 +9,7 @@ nds_repack.py, export_models.py and collision.py.
 """
 import os, sys, math, threading, queue, traceback, subprocess, platform
 
-LOGFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ge_modtool_error.log')
+LOGFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pandora_editor_error.log')
 
 
 def _fatal(msg):
@@ -24,7 +24,7 @@ def _fatal(msg):
         import tkinter as _tk
         from tkinter import messagebox as _mb
         r = _tk.Tk(); r.withdraw()
-        _mb.showerror('GoldenEye Mod Tool', msg)
+        _mb.showerror('Pandora editor', msg)
     except Exception:
         pass
     try:
@@ -392,7 +392,7 @@ if tk is not None:
     class App(tk.Tk):
         def __init__(self):
             super().__init__()
-            self.title('GoldenEye: Rogue Agent DS - Mod Tool')
+            self.title('GoldenEye: Rogue Agent DS - Pandora editor')
             self.geometry('1150x780')
             self.minsize(900, 600)
             self.q = queue.Queue()
