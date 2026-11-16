@@ -21,6 +21,7 @@ Textures (Textures tab)
     original palette slot has (shown under the picture), so very colourful art gets quantised.
 
 Models (Model tab)
+  View controls (all 3D views): drag = rotate, right-drag = pan, wheel = zoom, "Reset view" recentres.
   Export OBJ...            one OBJ object per shape, named shpNNN_<node>.
   Replace with any OBJ...  puts ANY OBJ into the selected model, whatever its object names or where it came
                            from. You choose which of the model's own materials each part of your OBJ uses
@@ -84,7 +85,9 @@ Rooms (Rooms tab, Global.ROO)
   a bigger box.
   - Select a Global.ROO in the list on the left. The view under the table (and the Model tab) shows
     every box as a wireframe (yellow = selected room, blue = the others) with the room names;
-    drag = rotate, wheel = zoom.
+    drag = rotate, right-drag = pan, wheel = zoom.
+  - Picking a room centres the view on that room's box; the rotation and zoom stay exactly as they
+    were, so you can compare rooms at the same angle and distance.
   - The table lists every room with its flags and Min/Max X/Y/Z. Pick a room (or double-click a row),
     edit the six values under the table and click "Apply box and save".
   - Apply writes the file straight away; the first change keeps the original under

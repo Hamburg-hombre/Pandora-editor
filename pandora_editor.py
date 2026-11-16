@@ -439,7 +439,9 @@ if tk is not None:
             self.tree_paths = {}
             self.yaw, self.pitch, self.zoom = 0.6, 0.35, 1.0
             self.drag = None
+            self.drag_r = None
             self.view = None
+            self.base_view = None
             self.photo = None
             self.room_canvas = None
             self._last_tex = None
@@ -504,7 +506,7 @@ if tk is not None:
             ttk.Button(bar, text='Reset view', command=self.reset_view).pack(side='left', padx=6)
             ttk.Button(bar, text='Replace with any OBJ…', command=self.do_replace_obj).pack(side='right')
             ttk.Button(bar, text='Export OBJ…', command=self.do_export_one).pack(side='right')
-            ttk.Label(bar, text='drag = rotate, wheel = zoom', foreground='gray').pack(side='left', padx=8)
+            ttk.Label(bar, text='drag = rotate, right-drag = pan, wheel = zoom', foreground='gray').pack(side='left', padx=8)
             cb = ttk.Frame(mt)
             cb.pack(fill='x', pady=(3, 0))
             ttk.Button(cb, text='Export collision OBJ…', command=self.do_export_collision).pack(side='left')
@@ -517,6 +519,9 @@ if tk is not None:
             self.canvas.bind('<ButtonPress-1>', self.on_press)
             self.canvas.bind('<B1-Motion>', self.on_drag)
             self.canvas.bind('<ButtonRelease-1>', self.on_release)
+            self.canvas.bind('<ButtonPress-3>', self.on_press_r)
+            self.canvas.bind('<B3-Motion>', self.on_drag_r)
+            self.canvas.bind('<ButtonRelease-3>', self.on_release_r)
             self.canvas.bind('<MouseWheel>', self.on_wheel)
             self.canvas.bind('<Button-4>', lambda e: self.zoom_by(1.1))
             self.canvas.bind('<Button-5>', lambda e: self.zoom_by(1 / 1.1))
@@ -605,6 +610,9 @@ if tk is not None:
             self.room_canvas.bind('<ButtonPress-1>', self.on_press)
             self.room_canvas.bind('<B1-Motion>', self.on_drag)
             self.room_canvas.bind('<ButtonRelease-1>', self.on_release)
+            self.room_canvas.bind('<ButtonPress-3>', self.on_press_r)
+            self.room_canvas.bind('<B3-Motion>', self.on_drag_r)
+            self.room_canvas.bind('<ButtonRelease-3>', self.on_release_r)
             self.room_canvas.bind('<MouseWheel>', self.on_wheel)
             self.room_canvas.bind('<Button-4>', lambda e: self.zoom_by(1.1))
             self.room_canvas.bind('<Button-5>', lambda e: self.zoom_by(1 / 1.1))
@@ -789,6 +797,7 @@ if tk is not None:
             self.roo = None
             self.roo_room = None
             self.roo_base_view = None
+            self.base_view = None
             self.room_tree.delete(*self.room_tree.get_children())
             self.rooms_hint.set('Open a level\'s Global.ROO in the list on the left to see and edit its room boxes.')
             for v in self.room_vars:
@@ -828,6 +837,7 @@ if tk is not None:
                 self.collision = col
                 self.view_tris = col.triangles()
                 self.view = bounds(self.view_tris)
+                self.base_view = self.view
                 parts = ', '.join('%s: %d verts / %d tris' % (m.name, len(m.verts), len(m.tris))
                                   for m in col.meshes)
                 self.info.set('%s  -  collision v%d, %d triangle(s)  -  %s'
@@ -845,6 +855,7 @@ if tk is not None:
                 self.roo_room = 0 if roo.rooms else None
                 self.roo_base_view = boxes_bounds([r['box'] for r in roo.rooms])
                 self.view = self.roo_base_view
+                self.base_view = self.view
                 self.fill_rooms()
                 self.rooms_hint.set(
                     '%s: %d room box(es). Pick a room, then edit its Min/Max values below. The game only '
@@ -869,6 +880,7 @@ if tk is not None:
             tris = L.triangles() if L.models else []
             self.view_tris = tris
             self.view = bounds(tris)
+            self.base_view = self.view
             msg = name
             if L.models:
                 msg += '  -  %d model(s), %d triangles' % (len(L.models), len(tris))
@@ -992,6 +1004,15 @@ if tk is not None:
                     return
             self.roo_room = idx
             self._load_room_vars(idx)
+            self._focus_room()
+
+        def _focus_room(self):
+            """Centre the view on the selected room.  Rotation and zoom stay untouched."""
+            if self.roo is None or self.roo_room is None or self.view is None:
+                return
+            b = self.roo.rooms[self.roo_room]['box']
+            mid = ((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2)
+            self.view = (mid, self.view[1])          # same radius -> same apparent size
             self.redraw()
 
         def apply_room_box(self):
@@ -1033,10 +1054,12 @@ if tk is not None:
             self.redraw()
 
         def zoom_room(self):
-            if self.roo is None or self.roo_room is None:
+            if self.roo is None or self.roo_room is None or not self.roo_base_view:
                 return
-            self.view = boxes_bounds([self.roo.rooms[self.roo_room]['box']])
-            self.yaw, self.pitch, self.zoom = 0.6, 0.35, 1.0
+            b = self.roo.rooms[self.roo_room]['box']
+            center, room_radius = boxes_bounds([b])
+            self.view = (center, self.roo_base_view[1])   # radius stays fixed, zoom does the work
+            self.zoom = max(0.02, min(500.0, self.roo_base_view[1] / room_radius))
             self.redraw()
 
         # ------------------------------------------------------------ model view
@@ -1044,10 +1067,12 @@ if tk is not None:
             self.yaw, self.pitch, self.zoom = 0.6, 0.35, 1.0
             if self.roo is not None and self.roo_base_view:
                 self.view = self.roo_base_view
+            elif self.base_view:
+                self.view = self.base_view
             self.redraw()
 
         def zoom_by(self, f):
-            self.zoom = max(0.1, min(20, self.zoom * f))
+            self.zoom = max(0.02, min(500, self.zoom * f))
             self.redraw()
 
         def on_wheel(self, e):
@@ -1068,6 +1093,38 @@ if tk is not None:
         def on_release(self, _e):
             self.drag = None
             self.redraw()
+
+        def on_press_r(self, e):
+            self.drag_r = (e.x, e.y)
+
+        def on_drag_r(self, e):
+            if not self.drag_r:
+                return
+            dx, dy = e.x - self.drag_r[0], e.y - self.drag_r[1]
+            self.drag_r = (e.x, e.y)
+            self.pan_by(dx, dy, e.widget)
+
+        def on_release_r(self, _e):
+            self.drag_r = None
+            self.redraw()
+
+        def pan_by(self, dx, dy, canvas=None):
+            """Move the view sideways: the scene follows the mouse, angles and zoom unchanged."""
+            if self.view is None:
+                return
+            c = canvas or self.canvas
+            w, h = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
+            center, radius = self.view
+            scale = self.zoom * min(w, h) / (2.2 * radius)
+            cy, sy_ = math.cos(self.yaw), math.sin(self.yaw)
+            cp, sp = math.cos(self.pitch), math.sin(self.pitch)
+            # screen delta -> camera-space move of the looked-at point (cam[1] is flipped on screen)
+            u = -dx / scale
+            v = dy / scale
+            self.view = ((center[0] + cy * u + sy_ * sp * v,
+                          center[1] + cp * v,
+                          center[2] + sy_ * u - cy * sp * v), radius)
+            self.redraw(fast=True)
 
         def redraw(self, fast=False):
             c = self.canvas
@@ -1125,7 +1182,8 @@ if tk is not None:
                         c.create_text(sx, sy, text=room['name'], fill=color, font=('TkDefaultFont', 8),
                                       anchor='center')
             c.create_text(8, max(8, h - 8), anchor='sw', fill='#9fb2c4', font=('TkDefaultFont', 8), text=(
-                'room boxes: yellow = selected, blue = others   -   drag = rotate, wheel = zoom'))
+                'room boxes: yellow = selected, blue = others   -   drag = rotate, '
+                'right-drag = pan, wheel = zoom'))
 
         # ------------------------------------------------------------ texture view
         def _current_tex(self):
