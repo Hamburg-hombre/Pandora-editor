@@ -54,6 +54,7 @@ except ImportError:          # headless use (tests); main() explains the problem
 try:
     from nitro import *          # noqa
     import nds_unpack, nds_repack, export_models, collision
+    import objects_lp as lpmod
 except Exception as _e:
     _fatal('Could not load the tool files (%s: %s).\nKeep ALL the .py files from the zip in the same folder.'
            % (type(_e).__name__, _e))
@@ -434,6 +435,13 @@ if tk is not None:
             self.roo_room = None
             self.roo_base_view = None
             self.room_vars = [tk.StringVar() for _ in range(6)]
+            self.placement = None
+            self.lp_sel = None           # selected LPRecord, or (path_obj, node_index), or LPPath
+            self.lp_view_tris = []
+            self.lp_vars = [tk.StringVar() for _ in range(6)]   # x,y,z, + angle/halfx/halfz/height
+            self.lp_filter = tk.StringVar()
+            self.lp_kind = tk.StringVar(value='all')
+            self.lp_path_var = tk.StringVar()
             self.view_tris = []
             self.cur_path = None
             self.tree_paths = {}
@@ -636,6 +644,146 @@ if tk is not None:
                 'walkable area. "Apply" writes the file (a backup is kept); Repack the ROM to test it.'),
                 wraplength=780, justify='left').grid(row=3, column=0, columnspan=5, sticky='w', pady=(4, 0))
 
+            # ---- placement tab (Objects.LP)
+            pt = ttk.Frame(self.nb)
+            self.nb.add(pt, text='Placement (.LP)')
+            pbar = ttk.Frame(pt)
+            pbar.pack(fill='x')
+            ttk.Button(pbar, text='Show all', command=self.lp_show_all).pack(side='left')
+            ttk.Button(pbar, text='Zoom to selection', command=self.lp_zoom_sel).pack(side='left', padx=4)
+            ttk.Label(pbar, text='Show:').pack(side='left', padx=(10, 2))
+            self.lp_kind_box = ttk.Combobox(pbar, textvariable=self.lp_kind, state='readonly', width=15,
+                                            values=['Everything', 'Objects', 'Enemies (AI)', 'Trigger boxes'])
+            self.lp_kind_box.pack(side='left')
+            self.lp_kind.trace_add('write', lambda *a: self.fill_lp_place_table())
+            ttk.Label(pbar, text='filter name:').pack(side='left', padx=(10, 2))
+            self.lp_filter_entry = ttk.Entry(pbar, textvariable=self.lp_filter, width=22)
+            self.lp_filter_entry.pack(side='left')
+            self.lp_filter.trace_add('write', lambda *a: self.fill_lp_place_table())
+            self.lp_hint = tk.StringVar(value=(
+                'Open a level\'s Objects.LP on the left. It holds everything the level places: objects, '
+                'weapons, waypoints, trigger boxes (flags 0/2), the patrol path graph (flags 5) and the '
+                'enemy spawn points with their facing (flags 8). Positions are 12.12 fixed point in the '
+                'same space as the collision and models.'))
+            ttk.Label(pt, textvariable=self.lp_hint, foreground='#606060', wraplength=780,
+                      justify='left').pack(anchor='w', pady=(4, 4))
+            self.lp_canvas = tk.Canvas(pt, background='#202428', highlightthickness=0, height=250)
+            self.lp_canvas.pack(fill='both', expand=True)
+            self.lp_canvas.bind('<ButtonPress-1>', self.on_press)
+            self.lp_canvas.bind('<B1-Motion>', self.on_drag)
+            self.lp_canvas.bind('<ButtonRelease-1>', self.on_release)
+            self.lp_canvas.bind('<ButtonPress-3>', self.on_press_r)
+            self.lp_canvas.bind('<B3-Motion>', self.on_drag_r)
+            self.lp_canvas.bind('<ButtonRelease-3>', self.on_release_r)
+            self.lp_canvas.bind('<MouseWheel>', self.on_wheel)
+            self.lp_canvas.bind('<Button-4>', lambda e: self.zoom_by(1.1))
+            self.lp_canvas.bind('<Button-5>', lambda e: self.zoom_by(1 / 1.1))
+            self.lp_canvas.bind('<Configure>', lambda e: self.redraw())
+            inner = ttk.Notebook(pt)
+            inner.pack(fill='both', expand=True, pady=(4, 0))
+            self.lp_inner = inner
+
+            # ---- placements page
+            pp = ttk.Frame(inner)
+            inner.add(pp, text='Placements')
+            pf = ttk.PanedWindow(pp, orient='vertical')
+            pf.pack(fill='both', expand=True)
+            tablef = ttk.Frame(pf)
+            pf.add(tablef, weight=3)
+            cols = ('idx', 'h1', 'name', 'template', 'x', 'y', 'z')
+            heads = ('#', 'id', 'name (CodeStrings.CHR)', 'template', 'X', 'Y', 'Z')
+            widths = (34, 44, 150, 200, 70, 70, 70)
+            self.lp_place_tree = ttk.Treeview(tablef, columns=cols, show='headings', selectmode='browse',
+                                               height=8)
+            for c, hd, wd in zip(cols, heads, widths):
+                self.lp_place_tree.heading(c, text=hd)
+                self.lp_place_tree.column(c, width=wd, stretch=(c == 'template'),
+                                          anchor='w' if c in ('name', 'template') else 'center')
+            tsb = ttk.Scrollbar(tablef, command=self.lp_place_tree.yview)
+            self.lp_place_tree.configure(yscrollcommand=tsb.set)
+            self.lp_place_tree.pack(side='left', fill='both', expand=True)
+            tsb.pack(side='right', fill='y')
+            self.lp_place_tree.bind('<<TreeviewSelect>>', self.on_lp_place_select)
+            self.lp_place_tree.bind('<Double-1>', lambda e: self.lp_focus_sel())
+            ppan = ttk.LabelFrame(pp, text=' Selected placement ', padding=6)
+            ppan.pack(fill='x', pady=(6, 0))
+            for k, ax in enumerate(('X', 'Y', 'Z')):
+                ttk.Label(ppan, text=ax).grid(row=0, column=k + 1)
+            ttk.Label(ppan, text='Position').grid(row=1, column=0, sticky='e', padx=(0, 6))
+            for i in range(3):
+                ent = ttk.Entry(ppan, textvariable=self.lp_vars[i], width=11)
+                ent.grid(row=1, column=1 + i, padx=3, pady=2, sticky='w')
+            ttk.Label(ppan, text='Facing').grid(row=2, column=0, sticky='e', padx=(0, 6))
+            self.lp_angle_ent = ttk.Entry(ppan, textvariable=self.lp_vars[3], width=11)
+            self.lp_angle_ent.grid(row=2, column=1, padx=3, pady=2, sticky='w')
+            ttk.Label(ppan, text='brads (4096 = 360°)').grid(row=2, column=2, columnspan=2,
+                                                            sticky='w', padx=3)
+            ttk.Label(ppan, text='Box').grid(row=2, column=3, sticky='e')
+            self.lp_box_vars = [tk.StringVar() for _ in range(3)]     # half X, half Z, height
+            for i in range(3):
+                ttk.Entry(ppan, textvariable=self.lp_box_vars[i], width=8).grid(
+                    row=2, column=4 + i, padx=3, pady=2, sticky='w')
+            ttk.Label(ppan, text='half X / half Z / height').grid(row=2, column=7, sticky='w')
+            ttk.Button(ppan, text='Apply and save', command=self.lp_apply_save).grid(
+                row=1, column=8, rowspan=2, padx=(10, 0))
+            qb = ttk.Frame(ppan)
+            qb.grid(row=3, column=0, columnspan=10, sticky='w', pady=(6, 0))
+            ttk.Button(qb, text='Add placement…', command=self.lp_add_placement).pack(side='left')
+            ttk.Button(qb, text='Duplicate placement…', command=self.lp_duplicate_placement).pack(
+                side='left', padx=6)
+            ttk.Button(qb, text='Delete placement', command=self.lp_delete_placement).pack(side='left')
+            ttk.Label(ppan, foreground='#606060', text=(
+                'Coordinates are the level\'s world space. "Apply and save" rewrites the file (a backup is '
+                'kept); repack the ROM to test it. Enemies store a facing; trigger boxes store a '
+                'centred box.')).grid(row=4, column=0, columnspan=10, sticky='w', pady=(4, 0))
+
+            # ---- paths page
+            qp = ttk.Frame(inner)
+            inner.add(qp, text='Paths')
+            qf = ttk.PanedWindow(qp, orient='vertical')
+            qf.pack(fill='both', expand=True)
+            qtablef = ttk.Frame(qf)
+            qf.add(qtablef, weight=3)
+            qcols = ('node', 'x', 'y', 'z', 'deg')
+            qheads = ('node', 'X', 'Y', 'Z', 'links')
+            qwidths = (60, 90, 90, 90, 60)
+            self.lp_path_tree = ttk.Treeview(qtablef, columns=qcols, show='tree headings',
+                                             selectmode='browse', height=9)
+            self.lp_path_tree.heading('#0', text='path')
+            self.lp_path_tree.column('#0', width=170, stretch=True, anchor='w')
+            for c, hd, wd in zip(qcols, qheads, qwidths):
+                self.lp_path_tree.heading(c, text=hd)
+                self.lp_path_tree.column(c, width=wd, stretch=False, anchor='center')
+            qsb = ttk.Scrollbar(qtablef, command=self.lp_path_tree.yview)
+            self.lp_path_tree.configure(yscrollcommand=qsb.set)
+            self.lp_path_tree.pack(side='left', fill='both', expand=True)
+            qsb.pack(side='right', fill='y')
+            self.lp_path_tree.bind('<<TreeviewSelect>>', self.on_lp_path_select)
+            self.lp_path_tree.bind('<Double-1>', lambda e: self.lp_focus_sel())
+            qpan = ttk.LabelFrame(qp, text=' Selected path node ', padding=6)
+            qpan.pack(fill='x', pady=(6, 0))
+            for k, ax in enumerate(('X', 'Y', 'Z')):
+                ttk.Label(qpan, text=ax).grid(row=0, column=k + 1)
+            self.lp_pvars = [tk.StringVar() for _ in range(3)]
+            for i in range(3):
+                ttk.Entry(qpan, textvariable=self.lp_pvars[i], width=11).grid(
+                    row=1, column=1 + i, padx=3, pady=2, sticky='w')
+            ttk.Button(qpan, text='Apply and save', command=self.lp_path_apply_save).grid(
+                row=1, column=4, padx=(10, 0))
+            qb2 = ttk.Frame(qpan)
+            qb2.grid(row=2, column=0, columnspan=5, sticky='w', pady=(6, 0))
+            ttk.Button(qb2, text='Add node', command=self.lp_path_add_node).pack(side='left')
+            ttk.Button(qb2, text='Remove node', command=self.lp_path_del_node).pack(side='left', padx=4)
+            ttk.Button(qb2, text='Add path', command=self.lp_path_add_path).pack(side='left', padx=4)
+            ttk.Button(qb2, text='Delete path', command=self.lp_path_del_path).pack(side='left', padx=4)
+            qb3 = ttk.Frame(qpan)
+            qb3.grid(row=3, column=0, columnspan=5, sticky='w', pady=(4, 0))
+            ttk.Button(qb3, text='Link nodes…', command=self.lp_path_add_edge).pack(side='left')
+            ttk.Button(qb3, text='Unlink', command=self.lp_path_del_edge).pack(side='left', padx=4)
+            ttk.Label(qb3, foreground='#606060', text=(
+                '  Edges are stored in both directions and their lengths are rewritten when you apply. '
+                'The AI uses these graphs to walk patrol routes.')).pack(side='left', padx=6)
+
             # ---- log
             lf = ttk.Frame(self, padding=(6, 4))
             lf.pack(fill='x')
@@ -797,7 +945,20 @@ if tk is not None:
             self.roo = None
             self.roo_room = None
             self.roo_base_view = None
+            self.placement = None
+            self.lp_view_tris = []
             self.base_view = None
+            if getattr(self, 'lp_place_tree', None) is not None:
+                self.lp_place_tree.delete(*self.lp_place_tree.get_children())
+                self.lp_path_tree.delete(*self.lp_path_tree.get_children())
+                self.lp_hint.set('Open a level\'s Objects.LP on the left to see and edit its enemy and '
+                                 'object placements and its patrol paths.')
+                for v in self.lp_vars:
+                    v.set('')
+                for v in self.lp_pvars:
+                    v.set('')
+                for v in self.lp_box_vars:
+                    v.set('')
             self.room_tree.delete(*self.room_tree.get_children())
             self.rooms_hint.set('Open a level\'s Global.ROO in the list on the left to see and edit its room boxes.')
             for v in self.room_vars:
@@ -844,6 +1005,14 @@ if tk is not None:
                               % (name, col.version, len(self.view_tris), parts))
                 self.nb.select(0)
                 self.reset_view()
+                return
+            if low.endswith('.lp'):
+                try:
+                    lp = lpmod.parse(path)
+                except Exception as e:
+                    self.info.set('%s: could not parse placement file (%s)' % (name, e))
+                    return
+                self.lp_load(path, lp)
                 return
             if low.endswith('.roo'):
                 try:
@@ -1062,6 +1231,790 @@ if tk is not None:
             self.zoom = max(0.02, min(500.0, self.roo_base_view[1] / room_radius))
             self.redraw()
 
+        # ------------------------------------------------------- placement view (.LP)
+        def lp_load(self, path, lp):
+            folder = os.path.dirname(path)
+            tris = []
+            for f in sorted(os.listdir(folder)):
+                if f.lower().endswith('.cvhm'):
+                    try:
+                        tris.extend(collision.parse(os.path.join(folder, f)).triangles())
+                    except Exception:
+                        pass
+            name = os.path.basename(path)
+            chr_obj = None
+            try:
+                chr_obj = lpmod.load_chr(os.path.join(folder, 'CodeStrings.CHR'))
+            except Exception:
+                pass
+            root = self.work_var.get().strip() or os.path.dirname(path)
+            template_details = lpmod.load_template_details(os.path.join(root, 'Templates.CRT'),
+                                                           os.path.join(root, 'Global.LVL'))
+            p = dict(path=path, lp=lp, chr=chr_obj, templates={d['w1']: d['name'] for d in template_details},
+                     template_details=template_details,
+                     context_tris=tris,
+                     sel_rec=None, sel_node=None, sel_path=None, rows={})
+            p['base_view'] = self.lp_compute_view(lp, tris)
+            self.placement = p
+            self.view = p['base_view']
+            self.base_view = p['base_view']
+            n_ai = len(lp.records(lpmod.REC_AI))
+            n_tr = len(lp.records(lpmod.REC_TRIGGER))
+            n_ob = len(lp.records(lpmod.REC_STATIC))
+            n_nodes = sum(pp.node_count for pp in lp.paths())
+            self.lp_hint.set('%s  -  %d placements (%d objects, %d enemies, %d trigger boxes), '
+                             '%d path(s) with %d node(s)  -  %s'
+                             % (name, n_ob + n_ai + n_tr, n_ob, n_ai, n_tr, len(lp.paths()), n_nodes,
+                                'CodeStrings.CHR loaded' if chr_obj else 'no CodeStrings.CHR found'))
+            self.fill_lp_place_table()
+            self.fill_lp_path_tree()
+            self.info.set('%s  -  %d placements, %d path(s), %d path node(s)'
+                          % (name, n_ob + n_ai + n_tr, len(lp.paths()), n_nodes))
+            self.nb.select(4)
+            self.reset_view()
+
+        @staticmethod
+        def lp_compute_view(lp, tris):
+            pts = []
+            for r in lp.records():
+                pts.append(r.position)
+                box = r.box
+                if box:
+                    pts += [box[0], box[1]]
+            for path in lp.paths():
+                for i in range(path.node_count):
+                    pts.append(path.node_pos(i))
+            if tris:
+                c, r = bounds(tris)
+                lo = [min(p[k] for p in tris for p in [p]) for k in range(3)] if False else None
+                xs = [v[0] for t in tris for v in t]
+                ys = [v[1] for t in tris for v in t]
+                zs = [v[2] for t in tris for v in t]
+                lo = (min(xs), min(ys), min(zs))
+                hi = (max(xs), max(ys), max(zs))
+            elif pts:
+                lo = (min(p[0] for p in pts), min(p[1] for p in pts), min(p[2] for p in pts))
+                hi = (max(p[0] for p in pts), max(p[1] for p in pts), max(p[2] for p in pts))
+            else:
+                lo = hi = (0, 0, 0)
+            center = ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2)
+            radius = max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2 or 1.0
+            return center, radius
+
+        def lp_context(self, c, w, h, fast=False):
+            """Wireframe of the level geometry, faint, as a backdrop."""
+            P = self.placement
+            tris = P['context_tris']
+            if not tris:
+                return
+            center, radius = self.view
+            step = max(1, len(tris) // 1200) if fast else 1
+            for i in range(0, len(tris), step):
+                p = tris[i]
+                pts = []
+                for v in p:
+                    x, y = self.lp_project(v, center, radius, w, h)
+                    pts += [x, y]
+                c.create_polygon(pts, fill='', outline='#3a4750')
+
+        def lp_project(self, v, center, radius, w, h):
+            tf, screen = _camera(center, radius, self.yaw, self.pitch, self.zoom, w, h)
+            return screen(tf(v))
+
+        def lp_draw_paths(self, c, w, h):
+            P = self.placement
+            center, radius = self.view
+            tf, screen = _camera(center, radius, self.yaw, self.pitch, self.zoom, w, h)
+            if not P or not P['lp'].paths():
+                return
+            paths = P['lp'].paths()
+            sel_path, sel_node = P['sel_path'], P['sel_node']
+            for pi, path in enumerate(paths):
+                color = '#59b7e8' if sel_path == pi else '#2f7ba0'
+                spts = [screen(tf(path.node_pos(i))) for i in range(path.node_count)]
+                for a, b, _d in path.edges:
+                    c.create_line(spts[a][0], spts[a][1], spts[b][0], spts[b][1],
+                                  fill=color, width=2 if sel_path == pi else 1)
+                for ni, sp in enumerate(spts):
+                    is_sel = sel_node == (pi, ni)
+                    r = 5 if is_sel else 3
+                    c.create_oval(sp[0] - r, sp[1] - r, sp[0] + r, sp[1] + r,
+                                  fill='#ffd24a' if is_sel else '#8fd0ff', outline='')
+
+        def lp_draw_records(self, c, w, h):
+            P = self.placement
+            if not P:
+                return
+            center, radius = self.view
+            tf, screen = _camera(center, radius, self.yaw, self.pitch, self.zoom, w, h)
+            recs = P['lp'].records()
+            for rec in recs:
+                box = rec.box
+                if box:
+                    color = '#ffd24a' if rec is P['sel_rec'] else '#8a6d2f'
+                    lo, hi = box
+                    for p1, p2 in box_edges([lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]]):
+                        x1, y1 = screen(tf(p1))
+                        x2, y2 = screen(tf(p2))
+                        c.create_line(x1, y1, x2, y2, fill=color,
+                                      width=2 if rec is P['sel_rec'] else 1)
+                    continue
+                x, y = screen(tf(rec.position))
+                is_sel = rec is P['sel_rec']
+                r = 6 if is_sel else 3
+                if is_sel:
+                    c.create_oval(x - r - 2, y - r - 2, x + r + 2, y + r + 2,
+                                  outline='#ffffff', width=2)
+                c.create_oval(x - r, y - r, x + r, y + r,
+                              fill=('#ff7a5c' if rec.is_ai else '#7ce38b'), outline='')
+                if is_sel:
+                    name = self.lp_rec_name(rec)
+                    c.create_text(x + 10, y - 8, anchor='w', fill='#ffffff',
+                                  font=('TkDefaultFont', 8), text=name)
+        
+        def lp_rec_name(self, rec):
+            P = self.placement
+            ch = P.get('chr') if P else None
+            if ch and rec.h1 < ch.count:
+                return ch.strings[rec.h1]
+            return 'placement %d' % rec.h1
+
+        def lp_name(self, w1):
+            P = self.placement
+            return P['templates'].get(w1, 'template %08x' % w1) if P else 'template %08x' % w1
+
+        def _draw_lp(self, c, w, h, fast=False):
+            P = self.placement
+            if not P:
+                return
+            self.lp_context(c, w, h, fast)
+            self.lp_draw_paths(c, w, h)
+            self.lp_draw_records(c, w, h)
+            c.create_text(8, max(8, h - 8), anchor='sw', fill='#9fb2c4', font=('TkDefaultFont', 8),
+                          text=('placement: red = enemy, green = object, yellow box = trigger, '
+                                'blue line/dot = path, yellow dot = selected'))
+
+        def lp_points_view(self):
+            P = self.placement
+            pts = []
+            for r in P['lp'].records():
+                pts.append(r.position)
+                box = r.box
+                if box:
+                    pts += [box[0], box[1]]
+            for path in P['lp'].paths():
+                for i in range(path.node_count):
+                    pts.append(path.node_pos(i))
+            if pts:
+                lo = [min(p[k] for p in pts) for k in range(3)]
+                hi = [max(p[k] for p in pts) for k in range(3)]
+                c = tuple((lo[k] + hi[k]) / 2 for k in range(3))
+                r = max(hi[k] - lo[k] for k in range(3)) / 2 or 1.0
+                return c, r
+            return self.view
+
+        def fill_lp_place_table(self):
+            tree = getattr(self, 'lp_place_tree', None)
+            if tree is None:
+                return
+            tree.delete(*tree.get_children())
+            P = self.placement
+            P and P.update(rows={})
+            if not P:
+                return
+            kind = self.lp_kind.get()
+            flt = self.lp_filter.get().strip().lower()
+            want = {'Everything': None, 'Objects': lpmod.REC_STATIC,
+                    'Enemies (AI)': lpmod.REC_AI, 'Trigger boxes': lpmod.REC_TRIGGER}.get(kind)
+            idx = 0
+            for rec in P['lp'].records():
+                if want is not None and rec.flags != want:
+                    continue
+                nm = self.lp_rec_name(rec)
+                tpl = self.lp_name(rec.w1) if rec.w1 else '(no template)'
+                if flt and flt not in nm.lower() and flt not in tpl.lower():
+                    continue
+                pos = rec.position
+                iid = str(idx)
+                idx += 1
+                tree.insert('', 'end', iid=iid, values=(idx, rec.h1, nm, tpl,
+                                                       '%.2f' % pos[0], '%.2f' % pos[1], '%.2f' % pos[2]))
+                P['rows'][iid] = rec
+            if P['sel_rec'] is not None:
+                for iid, rec in P['rows'].items():
+                    if rec is P['sel_rec']:
+                        tree.selection_set(iid)
+                        tree.see(iid)
+                        break
+
+        def fill_lp_path_tree(self):
+            tree = getattr(self, 'lp_path_tree', None)
+            if tree is None:
+                return
+            tree.delete(*tree.get_children())
+            P = self.placement
+            if not P:
+                return
+            paths = P['lp'].paths()
+            for pi, path in enumerate(paths):
+                color = 'path %d  (hash %08x, %d nodes, %d edges)' % (
+                    pi, path.hash, path.node_count, path.edge_count)
+                pid = tree.insert('', 'end', iid='p%d' % pi, text=color)
+                for ni in range(path.node_count):
+                    pos = path.node_pos(ni)
+                    deg = sum(1 for a, b, _ in path.edges if a == ni)
+                    tree.insert(pid, 'end', iid='p%dn%d' % (pi, ni),
+                                text='node %d' % ni,
+                                values=('%d' % ni, '%.2f' % pos[0], '%.2f' % pos[1],
+                                        '%.2f' % pos[2], deg))
+                tree.item(pid, open=True)
+
+        def lp_place_selected(self):
+            P = self.placement
+            if not P:
+                return None
+            sel = self.lp_place_tree.selection()
+            if not sel:
+                return None
+            return P['rows'].get(sel[0])
+
+        def on_lp_place_select(self, _e=None):
+            rec = self.lp_place_selected()
+            P = self.placement
+            if P is None:
+                return
+            P['sel_rec'] = rec
+            P['sel_node'] = None
+            for v in self.lp_vars:
+                v.set('')
+            for v in self.lp_box_vars:
+                v.set('')
+            if rec is None:
+                return
+            pos = rec.position
+            for i in range(3):
+                self.lp_vars[i].set('%.4f' % pos[i])
+            if rec.is_ai:
+                self.lp_vars[3].set(str(rec.angle))
+            if rec.is_trigger:
+                box = rec.box
+                if box:
+                    lo, hi = box
+                    self.lp_box_vars[0].set('%.3f' % (hi[0] - lo[0]) / 2)
+                    self.lp_box_vars[1].set('%.3f' % (hi[2] - lo[2]) / 2)
+                    self.lp_box_vars[2].set('%.3f' % (hi[1] - lo[1]))
+            self.redraw()
+
+        def on_lp_path_select(self, _e=None):
+            P = self.placement
+            if P is None:
+                return
+            sel = self.lp_path_tree.selection()
+            if not sel:
+                P['sel_node'] = None
+                P['sel_path'] = None
+                return
+            iid = sel[0]
+            if iid.startswith('p') and 'n' not in iid[1:]:
+                P['sel_path'] = int(iid[1:])
+                P['sel_node'] = None
+                for v in self.lp_pvars:
+                    v.set('')
+            else:
+                head, node = iid[1:].split('n', 1)
+                P['sel_path'] = int(head)
+                P['sel_node'] = (int(head), int(node))
+                path = P['lp'].paths()[int(head)]
+                pos = path.node_pos(int(node))
+                for i in range(3):
+                    self.lp_pvars[i].set('%.4f' % pos[i])
+            P['sel_rec'] = None
+            self.redraw()
+
+        def lp_write_file(self):
+            P = self.placement
+            lp = P['lp']
+            work = self.work_var.get().strip()
+            backup_file(work, P['path'])
+            data = lp.to_bytes()
+            with open(P['path'], 'wb') as f:
+                f.write(data)
+            if P.get('chr') is not None:
+                chr_path = os.path.join(os.path.dirname(P['path']), 'CodeStrings.CHR')
+                if os.path.exists(chr_path):
+                    backup_file(work, chr_path)
+                    with open(chr_path, 'wb') as f:
+                        f.write(P['chr'].to_bytes())
+            self.btn_revert.configure(state='normal' if self._has_backup(P['path']) else 'disabled')
+            return len(data)
+
+        def lp_apply_save(self):
+            rec = self.lp_place_selected()
+            P = self.placement
+            if rec is None or P is None:
+                return messagebox.showinfo('Placement', 'Select a placement first.')
+            try:
+                vals = [float(v.get().strip().replace(',', '.')) for v in self.lp_vars[:3]]
+            except ValueError:
+                return messagebox.showerror('Placement', 'X, Y and Z must be numbers (level units).')
+            if any(abs(v) > 1e6 for v in vals):
+                return messagebox.showerror('Placement', 'Those coordinates are far outside the level.')
+            rec.set_position(*vals)
+            if rec.is_ai:
+                try:
+                    rec.set_angle(int(self.lp_vars[3].get().strip() or '0'))
+                except ValueError:
+                    return messagebox.showerror('Placement', 'Facing must be a whole number of brads '
+                                                             '(4096 = 360°).')
+            if rec.is_trigger:
+                try:
+                    bv = [float(v.get().strip().replace(',', '.')) for v in self.lp_box_vars]
+                except ValueError:
+                    return messagebox.showerror('Placement', 'Box half extents and height must be numbers.')
+                if bv[0] <= 0 or bv[1] <= 0 or bv[2] <= 0:
+                    return messagebox.showerror('Placement', 'Half X, half Z and height must be positive.')
+                rec.set_box(bv[0], bv[1], bv[2])
+            n = self.lp_write_file()
+            self.fill_lp_place_table()
+            self.redraw()
+            self.log('saved %s (%d bytes)  -  %s moved to (%.2f, %.2f, %.2f)'
+                     % (os.path.basename(P['path']), n, self.lp_rec_name(rec), vals[0], vals[1], vals[2]))
+            self.log('Repack the ROM to test it.')
+
+        def lp_duplicate_placement(self):
+            P = self.placement
+            if P is None:
+                return
+            src = P['sel_rec']
+            if src is None:
+                return messagebox.showinfo('Placement', 'Select the placement you want to duplicate.')
+            self.lp_add_dialog(src)
+
+        def lp_add_placement(self):
+            P = self.placement
+            if P is None:
+                return
+            self.lp_add_dialog(None)
+
+        def lp_delete_placement(self):
+            P = self.placement
+            rec = P and P['sel_rec']
+            if rec is None:
+                return messagebox.showinfo('Placement', 'Select a placement first.')
+            if not messagebox.askyesno('Delete placement',
+                                       'Delete %s (id %d) from this level?\n'
+                                       'The file is backed up, so "Revert file to original" undoes it.'
+                                       % (self.lp_rec_name(rec), rec.h1)):
+                return
+            P['lp'].remove_record(rec)
+            P['sel_rec'] = None
+            n = self.lp_write_file()
+            self.fill_lp_place_table()
+            self.redraw()
+            self.log('deleted placement id %d from %s (%d bytes)'
+                     % (rec.h1, os.path.basename(P['path']), n))
+            self.log('Repack the ROM to test it.')
+
+        def lp_zoom_sel(self):
+            P = self.placement
+            if not P:
+                return
+            pos = self.lp_selection_pos()
+            if pos is None:
+                return messagebox.showinfo('Placement', 'Select a placement or a path node first.')
+            self.view = (pos, self.view[1])
+            self.redraw()
+
+        def lp_selection_pos(self):
+            P = self.placement
+            if P['sel_rec'] is not None:
+                rec = P['sel_rec']
+                box = rec.box
+                if box:
+                    lo, hi = box
+                    return ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2)
+                return rec.position
+            if P['sel_node'] is not None:
+                pi, ni = P['sel_node']
+                return P['lp'].paths()[pi].node_pos(ni)
+            if P['sel_path'] is not None:
+                path = P['lp'].paths()[P['sel_path']]
+                if path.node_count:
+                    return path.node_pos(0)
+            return None
+
+        def lp_focus_sel(self):
+            self.lp_zoom_sel()
+
+        def lp_show_all(self):
+            P = self.placement
+            if not P:
+                return
+            self.view = P['base_view'] or self.lp_points_view()
+            self.yaw, self.pitch, self.zoom = 0.6, 0.35, 1.0
+            self.redraw()
+
+        def lp_add_dialog(self, src):
+            P = self.placement
+            lp = P['lp']
+            dlg = tk.Toplevel(self)
+            dlg.title('Duplicate placement' if src else 'Add placement')
+            dlg.transient(self)
+            dlg.grab_set()
+            dlg.resizable(False, False)
+
+            kind_var = tk.StringVar(value=('AI enemy' if src is not None and src.is_ai else
+                                           'Trigger box' if src is not None and src.is_trigger else
+                                           'Object'))
+            details = P['template_details']
+            kinds = {'Object': [d for d in details if d['kind'] == 'object'],
+                     'AI enemy': [d for d in details if d['kind'] == 'ai']}
+            tpl_var = tk.StringVar()
+            name_var = tk.StringVar(value=(src and ('%s_copy' % self.lp_rec_name(src)) or 'new_object'))
+            reuse_var = tk.BooleanVar(value=True)
+            slot_var = tk.StringVar()
+
+            ttk.Label(dlg, text='Kind:').grid(row=0, column=0, sticky='e', padx=6, pady=4)
+            kind_box = ttk.Combobox(dlg, textvariable=kind_var, state='readonly',
+                                    values=['Object', 'AI enemy', 'Trigger box'], width=20)
+            kind_box.grid(row=0, column=1, sticky='w', padx=6, pady=4)
+
+            ttk.Label(dlg, text='Template:').grid(row=1, column=0, sticky='e', padx=6, pady=4)
+            tpl_box = ttk.Combobox(dlg, textvariable=tpl_var, state='readonly', width=42)
+            tpl_box.grid(row=1, column=1, sticky='w', padx=6, pady=4)
+
+            def refill_templates(*_):
+                k = kind_var.get()
+                if k == 'Trigger box':
+                    tpl_box.configure(values=['(trigger volumes need no template)'], state='disabled')
+                    tpl_var.set('(trigger volumes need no template)')
+                    return
+                opts = kinds.get(k) or [dict(w1=0, name='(no template)')]
+                tpl_box.configure(values=['%s   [%08x]' % (d['name'], d['w1']) for d in opts],
+                                  state='readonly')
+                tpl_var.set('%s   [%08x]' % (opts[0]['name'], opts[0]['w1']))
+            kind_box.bind('<<ComboboxSelected>>', refill_templates)
+            refill_templates()
+
+            ttk.Label(dlg, text='Name:').grid(row=2, column=0, sticky='e', padx=6, pady=4)
+            ttk.Entry(dlg, textvariable=name_var, width=42).grid(row=2, column=1, sticky='w', padx=6, pady=4)
+
+            # unused slots the user can reuse for the name (cheaper than extending CHR)
+            ch = P['chr']
+            unused = []
+            if ch is not None:
+                used = lp.h1_used()
+                unused = [(h1, ch.strings[h1]) for h1 in range(ch.count) if h1 not in used]
+            reuse = ttk.Frame(dlg)
+            reuse.grid(row=3, column=0, columnspan=2, sticky='w', padx=6, pady=(2, 0))
+            ttk.Checkbutton(reuse, text='Reuse an unused slot from the level\'s list:',
+                            variable=reuse_var).pack(side='left')
+            ttk.Combobox(reuse, textvariable=slot_var, state='readonly', width=30,
+                         values=['%d: %s' % (h1, nm) for h1, nm in unused]).pack(side='left', padx=4)
+            if unused:
+                slot_var.set('%d: %s' % unused[0])
+            ttk.Label(dlg, text='Otherwise a new name is appended to the level\'s CodeStrings.CHR.',
+                      foreground='#606060').grid(row=4, column=0, columnspan=2, sticky='w', padx=6)
+
+            ttk.Label(dlg, text='Position:').grid(row=5, column=0, sticky='e', padx=6, pady=4)
+            posf = ttk.Frame(dlg)
+            posf.grid(row=5, column=1, sticky='w', padx=6)
+            pos_vars = [tk.StringVar() for _ in range(3)]
+            view = self.view
+            for i in range(3):
+                ttk.Entry(posf, textvariable=pos_vars[i], width=9).pack(side='left', padx=2)
+                pos_vars[i].set('%.2f' % view[0][i])
+            ttk.Label(posf, text='  (view centre)', foreground='#606060').pack(side='left')
+
+            def confirm():
+                k = kind_var.get()
+                try:
+                    pos = [float(v.get().strip().replace(',', '.')) for v in pos_vars]
+                except ValueError:
+                    return messagebox.showerror('Add placement', 'Position must be three numbers.',
+                                                parent=dlg)
+                # name / h1
+                if reuse_var.get() and unused:
+                    sel = slot_var.get()
+                    try:
+                        h1 = int(sel.split(':', 1)[0])
+                    except ValueError:
+                        return messagebox.showerror('Add placement',
+                                                    'Pick an unused slot from the list.', parent=dlg)
+                    chr_obj = None
+                else:
+                    nm = name_var.get().strip()
+                    if not nm:
+                        return messagebox.showerror('Add placement',
+                                                    'Enter a name for the new placement.', parent=dlg)
+                    try:
+                        nm.encode('ascii')
+                    except UnicodeEncodeError:
+                        return messagebox.showerror('Add placement',
+                                                    'Names must be plain ASCII.', parent=dlg)
+                    nm = nm.replace(' ', '_')
+                    if ch is None:
+                        return messagebox.showerror('Add placement',
+                                                    'No CodeStrings.CHR found next to the level\'s '
+                                                    'Objects.LP - cannot add new names.', parent=dlg)
+                    h1 = ch.append([nm])[0]
+                    chr_obj = ch
+                # template / flags
+                if k == 'Trigger box':
+                    w1 = 0
+                    flags = lpmod.REC_TRIGGER
+                else:
+                    tpl = tpl_var.get().rsplit('[', 1)
+                    w1 = int(tpl[1].rstrip(']'), 16) if len(tpl) == 2 else 0
+                    flags = lpmod.REC_AI if k == 'AI enemy' else lpmod.REC_STATIC
+                w0s = [r.w0 for r in lp.records()]
+                rec = lpmod.LPRecord(flags, lpmod.TRIGGER_SIZE if flags == lpmod.REC_TRIGGER
+                                     else lpmod.RECORD_SIZE,
+                                     (max(w0s) + 1) if w0s else 1, w1,
+                                     [0, 0, 0], b'\x00\x00\x00\x00\x00\x00', h1, 0xffffffff, 0)
+                rec.set_position(*pos)
+                if flags == lpmod.REC_TRIGGER:
+                    rec.set_box(1.0, 1.0, 3.0)
+                if src is not None and src.is_ai:
+                    rec.set_angle(src.angle)
+                    rec.typ = src.typ
+                if src is not None and src.is_trigger:
+                    rec.extra6 = src.extra6
+                if src is not None:
+                    rec.typ = src.typ
+                lp.add_record(rec)
+                n = self.lp_write_file()
+                self.fill_lp_place_table()
+                self.redraw()
+                self.log('added placement %s (id %d) to %s (%d bytes)'
+                         % (name_var.get().strip() or 'new', rec.h1, os.path.basename(P['path']), n))
+                self.log('Repack the ROM to test it.')
+                dlg.destroy()
+
+            bf = ttk.Frame(dlg)
+            bf.grid(row=6, column=0, columnspan=2, pady=8)
+            ttk.Button(bf, text='Cancel', command=dlg.destroy).pack(side='right', padx=4)
+            ttk.Button(bf, text='Add', command=confirm).pack(side='right')
+            dlg.wait_window(dlg)
+
+        # ------------------------------------------------- path editing
+        def lp_path_apply_save(self):
+            P = self.placement
+            if P is None:
+                return
+            sel = P['sel_node']
+            if sel is None:
+                return messagebox.showinfo('Paths', 'Select a path node first (click a node in the table '
+                                                    'or the 3D view).')
+            pi, ni = sel
+            path = P['lp'].paths()[pi]
+            try:
+                vals = [float(v.get().strip().replace(',', '.')) for v in self.lp_pvars]
+            except ValueError:
+                return messagebox.showerror('Paths', 'X, Y and Z must be numbers (level units).')
+            if any(abs(v) > 1e6 for v in vals):
+                return messagebox.showerror('Paths', 'Those coordinates are far outside the level.')
+            path.set_node_pos(ni, *vals)
+            path.recompute_distances()
+            n = self.lp_write_file()
+            self.fill_lp_path_tree()
+            self.redraw()
+            self.log('path %d node %d moved to (%.2f, %.2f, %.2f)  -  saved %s (%d bytes)'
+                     % (pi, ni, vals[0], vals[1], vals[2], os.path.basename(P['path']), n))
+            self.log('Repack the ROM to test it.')
+
+        def lp_path_selected_path(self):
+            P = self.placement
+            if P is None:
+                return None, None
+            if P['sel_path'] is not None:
+                return P['lp'].paths()[P['sel_path']], P['sel_path']
+            if P['sel_node'] is not None:
+                pi, _ = P['sel_node']
+                return P['lp'].paths()[pi], pi
+            return None, None
+
+        def lp_path_add_node(self):
+            P = self.placement
+            if P is None:
+                return
+            path, pi = self.lp_path_selected_path()
+            if path is None:
+                return messagebox.showinfo('Paths', 'Select a path first (or one of its nodes), or press '
+                                                    '"Add path" to create a new one.')
+            pos = self.view[0]
+            path.nodes.append([lpmod._fixed_up(pos[0]), lpmod._fixed_up(pos[1]), lpmod._fixed_up(pos[2])])
+            path.recompute_distances()
+            n = self.lp_write_file()
+            P['sel_node'] = (pi, path.node_count - 1)
+            self.fill_lp_path_tree()
+            self.redraw()
+            self.log('path %d: added node %d at (%.2f, %.2f, %.2f)  -  saved %s (%d bytes)'
+                     % (pi, path.node_count - 1, pos[0], pos[1], pos[2], os.path.basename(P['path']), n))
+
+        def lp_path_del_node(self):
+            P = self.placement
+            if P is None:
+                return
+            sel = P['sel_node']
+            if sel is None:
+                return messagebox.showinfo('Paths', 'Select a node to remove.')
+            pi, ni = sel
+            path = P['lp'].paths()[pi]
+            if not messagebox.askyesno('Remove node',
+                                       'Remove node %d from path %d?\nEdges attached to it are removed too.'
+                                       % (ni, pi)):
+                return
+            del path.nodes[ni]
+            path.edges = [[a, b, d] for a, b, d in path.edges if a != ni and b != ni]
+            path.edges = [[(a - 1 if a > ni else a), (b - 1 if b > ni else b), d]
+                          for a, b, d in path.edges]
+            path.recompute_distances()
+            P['sel_node'] = None
+            n = self.lp_write_file()
+            self.fill_lp_path_tree()
+            self.redraw()
+            self.log('path %d: removed node %d  -  saved %s (%d bytes)'
+                     % (pi, ni, os.path.basename(P['path']), n))
+
+        def lp_path_add_path(self):
+            P = self.placement
+            if P is None:
+                return
+            hashes = [p.hash for p in P['lp'].paths()]
+            new_hash = (max(hashes) + 1) if hashes else 0x1000
+            P['lp'].add_path(lpmod.LPPath(new_hash, b'\x00' * 36, [], []))
+            pi = len(P['lp'].paths()) - 1
+            P['sel_path'] = pi
+            P['sel_node'] = None
+            n = self.lp_write_file()
+            self.fill_lp_path_tree()
+            self.redraw()
+            self.log('added path %d (hash %08x)  -  saved %s (%d bytes)'
+                     % (pi, new_hash, os.path.basename(P['path']), n))
+
+        def lp_path_del_path(self):
+            P = self.placement
+            if P is None:
+                return
+            path, pi = self.lp_path_selected_path()
+            if path is None:
+                return messagebox.showinfo('Paths', 'Select a path to delete (click its title row).')
+            if not messagebox.askyesno('Delete path',
+                                       'Delete path %d (%d nodes, %d edges)?'
+                                       % (pi, path.node_count, path.edge_count)):
+                return
+            P['lp'].remove_path(path)
+            P['sel_path'] = None
+            P['sel_node'] = None
+            n = self.lp_write_file()
+            self.fill_lp_path_tree()
+            self.redraw()
+            self.log('deleted path %d  -  saved %s (%d bytes)' % (pi, os.path.basename(P['path']), n))
+
+        def lp_path_add_edge(self):
+            P = self.placement
+            if P is None:
+                return
+            path, pi = self.lp_path_selected_path()
+            if path is None:
+                return messagebox.showinfo('Paths', 'Select a path first (or one of its nodes).')
+            if path.node_count < 2:
+                return messagebox.showinfo('Paths', 'Add at least two nodes to the path first.')
+            dlg = tk.Toplevel(self)
+            dlg.title('Link nodes')
+            dlg.transient(self)
+            dlg.grab_set()
+            dlg.resizable(False, False)
+            opts = ['node %d   (%.2f, %.2f, %.2f)' % (
+                i, path.node_pos(i)[0], path.node_pos(i)[1], path.node_pos(i)[2])
+                for i in range(path.node_count)]
+            fv, tv = tk.StringVar(value=opts[0]), tk.StringVar(value=opts[1])
+            ttk.Label(dlg, text='From:').grid(row=0, column=0, sticky='e', padx=6, pady=4)
+            ttk.Combobox(dlg, textvariable=fv, values=opts, state='readonly', width=34).grid(
+                row=0, column=1, padx=6, pady=4)
+            ttk.Label(dlg, text='To:').grid(row=1, column=0, sticky='e', padx=6, pady=4)
+            ttk.Combobox(dlg, textvariable=tv, values=opts, state='readonly', width=34).grid(
+                row=1, column=1, padx=6, pady=4)
+
+            def confirm():
+                a = int(fv.get().split()[1])
+                b = int(tv.get().split()[1])
+                if a == b:
+                    return messagebox.showerror('Link nodes', 'Pick two different nodes.', parent=dlg)
+                exists = any((x == a and y == b) or (x == b and y == a) for x, y, _ in path.edges)
+                if exists:
+                    return messagebox.showerror('Link nodes', 'Those nodes are already linked.',
+                                                parent=dlg)
+                path.edges.append([a, b, 0])
+                path.edges.append([b, a, 0])
+                path.recompute_distances()
+                n = self.lp_write_file()
+                self.fill_lp_path_tree()
+                self.redraw()
+                self.log('path %d: linked node %d and node %d  -  saved %s (%d bytes)'
+                         % (pi, a, b, os.path.basename(P['path']), n))
+                dlg.destroy()
+
+            bf = ttk.Frame(dlg)
+            bf.grid(row=2, column=0, columnspan=2, pady=8)
+            ttk.Button(bf, text='Cancel', command=dlg.destroy).pack(side='right', padx=4)
+            ttk.Button(bf, text='Link', command=confirm).pack(side='right')
+            dlg.wait_window(dlg)
+
+        def lp_path_del_edge(self):
+            P = self.placement
+            if P is None:
+                return
+            path, pi = self.lp_path_selected_path()
+            if path is None:
+                return messagebox.showinfo('Paths', 'Select a path first (or one of its nodes).')
+            seen = set()
+            pairs = []
+            for a, b, _d in path.edges:
+                key = (min(a, b), max(a, b))
+                if key in seen:
+                    continue
+                seen.add(key)
+                pairs.append(key)
+            if not pairs:
+                return messagebox.showinfo('Paths', 'This path has no edges.')
+            dlg = tk.Toplevel(self)
+            dlg.title('Unlink nodes')
+            dlg.transient(self)
+            dlg.grab_set()
+            dlg.resizable(False, False)
+            ttk.Label(dlg, text='Select an edge to remove (both directions go):').pack(
+                anchor='w', padx=8, pady=(8, 4))
+            lb = tk.Listbox(dlg, height=min(12, len(pairs)), width=52, exportselection=False)
+            for a, b in pairs:
+                pa = path.node_pos(a)
+                pb = path.node_pos(b)
+                lb.insert('end', 'node %d (%.2f, %.2f, %.2f)  <->  node %d (%.2f, %.2f, %.2f)'
+                              % (a, pa[0], pa[1], pa[2], b, pb[0], pb[1], pb[2]))
+            lb.pack(padx=8, fill='both', expand=True)
+
+            def confirm():
+                sel = lb.curselection()
+                if not sel:
+                    return messagebox.showerror('Unlink nodes', 'Pick an edge to remove.', parent=dlg)
+                a, b = pairs[sel[0]]
+                path.edges = [[x, y, d] for x, y, d in path.edges
+                              if not ((x == a and y == b) or (x == b and y == a))]
+                path.recompute_distances()
+                n = self.lp_write_file()
+                self.fill_lp_path_tree()
+                self.redraw()
+                self.log('path %d: unlinked node %d and node %d  -  saved %s (%d bytes)'
+                         % (pi, a, b, os.path.basename(P['path']), n))
+                dlg.destroy()
+
+            bf = ttk.Frame(dlg)
+            bf.pack(pady=8)
+            ttk.Button(bf, text='Cancel', command=dlg.destroy).pack(side='right', padx=4)
+            ttk.Button(bf, text='Unlink', command=confirm).pack(side='right')
+            dlg.wait_window(dlg)
+
         # ------------------------------------------------------------ model view
         def reset_view(self):
             self.yaw, self.pitch, self.zoom = 0.6, 0.35, 1.0
@@ -1132,6 +2085,8 @@ if tk is not None:
             w, h = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
             if self.roo is not None:
                 self._draw_rooms(c, w, h)
+            elif self.placement is not None:
+                self._draw_lp(c, w, h, fast)      # same overlay as the Placement tab
             else:
                 self._draw_tris(c, w, h, fast)
             rc = getattr(self, 'room_canvas', None)
@@ -1139,6 +2094,11 @@ if tk is not None:
                 rc.delete('all')
                 if self.roo is not None:
                     self._draw_rooms(rc, max(rc.winfo_width(), 50), max(rc.winfo_height(), 50))
+            pc = getattr(self, 'lp_canvas', None)
+            if pc is not None:
+                pc.delete('all')
+                if self.placement is not None:
+                    self._draw_lp(pc, max(pc.winfo_width(), 50), max(pc.winfo_height(), 50), fast)
 
         def _draw_tris(self, c, w, h, fast=False):
             tris = self.view_tris

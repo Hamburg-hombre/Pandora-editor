@@ -11,7 +11,7 @@ Setup
 Workflow
   - Pick your .nds, click "Unpack ROM", browse the files on the left.
   - .nsbmd = models, .nsbtx = shared textures, .cvhm = collision, .roo = room boxes (now editable),
-    .txt = text (now editable).
+    .lp = enemy/object placements and paths (now viewable and editable), .txt = text (now editable).
   - Edit, then "Repack ROM..." writes a new .nds. The first edit of any file keeps a copy in
     <work folder>/_backup ; "Revert file to original" restores it.
 
@@ -97,6 +97,41 @@ Rooms (Rooms tab, Global.ROO)
   - Make a box at least as big as the walkable part of the room. Growing a box is always safe;
     shrinking it can make collision stop working in that room.
   - Repack the ROM to test it.
+
+Placement (Placement tab, Objects.LP)
+  Every level folder has an Objects.LP next to the models. It places everything the level
+  spawns: objects, weapons, waypoints, hints and trigger boxes (flags 0 and 2), the patrol
+  path graph the AI walks (flags 5) and the enemy spawn points with their facing (flags 8).
+  Positions are 12.12 fixed point in the same world space as the collision, the models and
+  the room boxes, so the existing 3D view shows them in place. The level's collision meshes
+  are drawn faintly behind the placements for reference.
+  - Select a level's Objects.LP in the list on the left. The view shows every placement as a
+    dot (red = enemy, green = object), every trigger box as a wireframe box, and every path
+    as lines with node dots. Yellow bracket = selected.
+  - "Show" and the name filter narrow the table below the view (Everything / Objects /
+    Enemies (AI) / Trigger boxes). Double-click a row (or the view) to centre the camera.
+  - The table lists every placement: id, its name from the level's CodeStrings.CHR, the
+    template it uses (from Templates.CRT; e.g. "Waypoint", "Barrel", "P90 Example"), and its
+    X/Y/Z. Pick one and edit the three coordinates, then "Apply and save".
+  - Enemies also store a Facing (a whole number of brads; 4096 brads = 360°, so 2048 = 180°).
+    Trigger boxes store a centred box (half X, half Z, height); the position is the box
+    centre on the floor.
+  - "Add placement…" asks for the kind (Object / AI enemy / Trigger box), the template and a
+    name. Either reuse an unused name from the level's list, or type a new one - new names
+    are appended to the level's CodeStrings.CHR (backed up like everything else). Enemies
+    added this way remember the facing of the placement you had selected, if any.
+  - "Duplicate placement…" copies the selected placement with a new id and a new name.
+  - "Delete placement" removes the record (a backup is kept).
+  - The Paths page lists each path section with its nodes and edges. Pick a node, edit its
+    X/Y/Z and "Apply and save"; "Add node" adds one at the camera centre, "Remove node"
+    deletes it and its edges, "Link nodes…" joins two nodes, "Unlink" removes the edge. Edge
+    lengths are always rewritten correctly when you apply. "Add path" creates a new empty
+    path; "Delete path" removes one.
+  - "Apply and save" rewrites Objects.LP (or CodeStrings.CHR) with a backup; repack the ROM
+    to test it. The log says what changed.
+  - The path graph is how the AI walks patrol routes: each node is a spot, each edge is a
+    walkable link. Moving nodes is safe. Deleting a path or a node removes it for good;
+    "Revert file to original" restores the backup.
 
 If something looks wrong
   - Some parts turn/spin with the camera: those shapes sit under billboard ("BB") nodes. Redo the
