@@ -47,6 +47,7 @@ except ImportError:
 try:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
+    import tkinter.font as tkfont
     from PIL import ImageTk
 except ImportError:          # headless use (tests); main() explains the problem
     tk = None
@@ -424,9 +425,9 @@ if tk is not None:
     class App(tk.Tk):
         def __init__(self):
             super().__init__()
-            self.title('GoldenEye: Rogue Agent DS - Pandora editor')
-            self.geometry('1150x780')
-            self.minsize(900, 600)
+            self.title('Pandora editor (GOLDENEYE: ROGUE AGENT DS)')
+            self.geometry('1280x820')
+            self.minsize(1000, 640)
             self.q = queue.Queue()
             self.busy = False
             self.loaded = None
@@ -440,7 +441,7 @@ if tk is not None:
             self.lp_view_tris = []
             self.lp_vars = [tk.StringVar() for _ in range(6)]   # x,y,z, + angle/halfx/halfz/height
             self.lp_filter = tk.StringVar()
-            self.lp_kind = tk.StringVar(value='all')
+            self.lp_kind = tk.StringVar(value='Everything')
             self.lp_path_var = tk.StringVar()
             self.view_tris = []
             self.cur_path = None
@@ -459,30 +460,309 @@ if tk is not None:
             self._build()
             self.after(100, self._poll)
 
+        # ------------------------------------------------------------- theme
+        def _apply_mktb_theme(self):
+            """Classic light-grey Windows chrome, white data grids and a black viewport."""
+            style = ttk.Style(self)
+            try:
+                style.theme_use('clam')
+            except tk.TclError:
+                pass
+            try:
+                for name in ('TkDefaultFont', 'TkTextFont', 'TkMenuFont',
+                             'TkHeadingFont', 'TkCaptionFont', 'TkTooltipFont'):
+                    tkfont.nametofont(name).configure(family='Segoe UI', size=9)
+            except Exception:
+                pass
+            bg, border = '#f0f0f0', '#a0a0a0'
+            style.configure('.', background=bg, foreground='#000000',
+                            font=('Segoe UI', 9), borderwidth=1)
+            style.configure('TFrame', background=bg)
+            style.configure('TLabel', background=bg, foreground='#000000')
+            style.configure('Hint.TLabel', background=bg, foreground='#5f5f5f')
+            style.configure('Status.TLabel', background=bg, foreground='#333333',
+                            font=('Segoe UI', 8))
+            style.configure('DockHeader.TLabel', background='#e4e4e4', foreground='#000000',
+                            font=('Segoe UI', 8, 'bold'), padding=(6, 2))
+            style.configure('TButton', background='#e1e1e1', foreground='#000000',
+                            padding=(8, 3), relief='raised', borderwidth=1,
+                            focusthickness=0)
+            style.map('TButton',
+                      background=[('disabled', '#f3f3f3'), ('pressed', '#c9e3f7'),
+                                  ('active', '#e8f4fc')],
+                      relief=[('pressed', 'sunken'), ('active', 'raised')])
+            style.configure('Tool.TButton', padding=(6, 2), font=('Segoe UI', 8))
+            style.configure('Small.TButton', padding=(2, 0), font=('Segoe UI', 8, 'bold'))
+            style.configure('TEntry', fieldbackground='#ffffff', foreground='#000000',
+                            padding=2, bordercolor=border, lightcolor='#ffffff',
+                            darkcolor='#a0a0a0')
+            style.configure('TCombobox', fieldbackground='#ffffff', padding=2)
+            style.configure('TCheckbutton', background=bg, foreground='#000000')
+            style.map('TCheckbutton', background=[('active', bg)])
+            style.configure('Sheet.TCheckbutton', background='#ffffff', foreground='#000000')
+            style.map('Sheet.TCheckbutton', background=[('active', '#ffffff')])
+            style.configure('TRadiobutton', background=bg)
+            style.configure('TNotebook', background=bg, borderwidth=0,
+                            tabmargins=(0, 2, 0, 0))
+            style.configure('TNotebook.Tab', background='#e4e4e4', foreground='#000000',
+                            padding=(14, 4), borderwidth=1, lightcolor='#ffffff',
+                            darkcolor='#a0a0a0')
+            style.map('TNotebook.Tab',
+                      background=[('selected', '#ffffff'), ('active', '#fafafa')],
+                      foreground=[('selected', '#000000')])
+            style.configure('Document.TNotebook', background=bg, borderwidth=0,
+                            tabmargins=(4, 3, 0, 0))
+            style.configure('Document.TNotebook.Tab', padding=(18, 5),
+                            font=('Segoe UI', 9))
+            style.configure('Dock.TNotebook', background='#ffffff', borderwidth=1,
+                            tabmargins=(0, 0, 0, 0))
+            style.configure('Dock.TNotebook.Tab', padding=(10, 3), font=('Segoe UI', 8))
+            style.configure('Section.TNotebook', background=bg, borderwidth=0,
+                            tabmargins=(0, 2, 0, 0))
+            style.configure('Section.TNotebook.Tab', padding=(11, 2), font=('Segoe UI', 8))
+            style.configure('Treeview', background='#ffffff', fieldbackground='#ffffff',
+                            foreground='#000000', rowheight=20, borderwidth=1,
+                            relief='solid', font=('Segoe UI', 9))
+            style.map('Treeview',
+                      background=[('selected', '#3399ff')],
+                      foreground=[('selected', '#ffffff')])
+            style.configure('Treeview.Heading', background='#e6e6e6', foreground='#000000',
+                            relief='raised', borderwidth=1, padding=(4, 3),
+                            font=('Segoe UI', 8, 'bold'))
+            style.map('Treeview.Heading', background=[('active', '#f2f2f2')])
+            style.configure('TLabelframe', background=bg, bordercolor=border,
+                            borderwidth=1, relief='groove')
+            style.configure('TLabelframe.Label', background=bg, foreground='#000000',
+                            font=('Segoe UI', 9, 'bold'))
+            style.configure('TPanedwindow', background=bg)
+            style.configure('TProgressbar', background='#4a9bd1', troughcolor='#dedede',
+                            borderwidth=1)
+            style.configure('TScrollbar', background='#e4e4e4', troughcolor='#f0f0f0',
+                            bordercolor=border, arrowcolor='#333333')
+            self.configure(background=bg)
+
+        # -------------------------------------------------------------- menu
+        def _build_menu(self):
+            mb = tk.Menu(self, tearoff=0, font=('Segoe UI', 9))
+            self.configure(menu=mb)
+
+            fm = tk.Menu(mb, tearoff=0, font=('Segoe UI', 9))
+            fm.add_command(label='Open ROM…', accelerator='Ctrl+O', command=self.pick_rom)
+            fm.add_command(label='Open work folder…', command=self.pick_work)
+            fm.add_separator()
+            fm.add_command(label='Unpack ROM…', command=self.do_unpack)
+            fm.add_command(label='Repack ROM…', command=self.do_repack)
+            fm.add_separator()
+            fm.add_command(label='Export all models + collision…', command=self.do_export_all)
+            fm.add_command(label='Revert selected file to original', command=self.do_revert)
+            fm.add_separator()
+            fm.add_command(label='Exit', command=self.destroy)
+            mb.add_cascade(label='File', menu=fm, underline=0)
+
+            em = tk.Menu(mb, tearoff=0, font=('Segoe UI', 9))
+            em.add_command(label='Save text', accelerator='Ctrl+S', command=self.save_text)
+            em.add_command(label='Reload text', command=self.reload_text)
+            em.add_separator()
+            em.add_command(label='Focus file filter',
+                           command=lambda: self.filter_entry.focus_set())
+            em.add_command(label='Clear file filter',
+                           command=lambda: self.filter_var.set(''))
+            mb.add_cascade(label='Edit', menu=em, underline=0)
+
+            tm = tk.Menu(mb, tearoff=0, font=('Segoe UI', 9))
+            tm.add_command(label='Reset model view', command=self.reset_view)
+            tm.add_command(label='Export current OBJ…', command=self.do_export_one)
+            tm.add_command(label='Replace model with any OBJ…', command=self.do_replace_obj)
+            tm.add_separator()
+            tm.add_command(label='Export collision OBJ…', command=self.do_export_collision)
+            tm.add_command(label='Generate collision from OBJ…',
+                           command=self.do_generate_collision)
+            tm.add_separator()
+            tm.add_command(label='Show all rooms', command=self.show_all_rooms)
+            tm.add_command(label='Zoom to selected room', command=self.zoom_room)
+            mb.add_cascade(label='Tools', menu=tm, underline=0)
+
+            hm = tk.Menu(mb, tearoff=0, font=('Segoe UI', 9))
+            hm.add_command(label='Controls / shortcuts…', command=self._show_controls)
+            hm.add_command(label='About Pandora editor…', command=self._show_about)
+            mb.add_cascade(label='Help', menu=hm, underline=0)
+
+            self.bind_all('<Control-o>', lambda e: self.pick_rom())
+            self.bind_all('<Control-s>', lambda e: (self.save_text(), 'break')[1])
+
+        def _show_controls(self):
+            messagebox.showinfo('Controls', (
+                'File list\n'
+                '  Click a file to open it. Filter box narrows the list.\n\n'
+                '3D viewport\n'
+                '  Left-drag = rotate, right-drag = pan, wheel = zoom.\n'
+                '  "Solid" toggles filled triangles; "Reset view" recentres.\n\n'
+                'Placement tab\n'
+                '  Click a row or a marker to select it; double-click to centre.\n'
+                '  + / − / duplicate / focus buttons sit above the table.\n\n'
+                'Files\n'
+                '  Edits are written in place and a copy is kept in _backup.\n'
+                '  Repack the ROM after editing to test in-game.'))
+
+        def _show_about(self):
+            messagebox.showinfo('About Pandora editor', (
+                'Pandora editor for GoldenEye: Rogue Agent (Nintendo DS).\n\n'
+                'Model, texture, text, room and Objects.LP editing, with a '
+                'classic Windows layout inspired by Mario Kart Toolbox.\n\n'
+                'Keep this script next to nitro.py, scene.py, collision.py, '
+                'objects_lp.py and the other tool modules.'))
+
+        def _dock_sheet(self, parent):
+            """White property sheet with dark MKTB-style group headers."""
+            sheet = tk.Frame(parent, background='#ffffff', highlightthickness=1,
+                             highlightbackground='#a0a0a0')
+            sheet.pack(fill='both', expand=True)
+
+            def group(title):
+                tk.Label(sheet, text='  ' + title, anchor='w', background='#0a246a',
+                         foreground='#ffffff', font=('Segoe UI', 9, 'bold'),
+                         padx=2, pady=2).pack(fill='x', pady=(0, 1))
+
+            def row(name, build=None, value=None):
+                r = tk.Frame(sheet, background='#ffffff')
+                r.pack(fill='x')
+                tk.Label(r, text=name, background='#ffffff', foreground='#000000',
+                         anchor='w', font=('Segoe UI', 9), padx=4).pack(side='left')
+                if build is not None:
+                    build(r)
+                elif value is not None:
+                    tk.Label(r, textvariable=value, background='#ffffff',
+                             foreground='#000000', anchor='e', font=('Segoe UI', 9),
+                             padx=4).pack(side='right')
+                return r
+
+            return sheet, group, row
+
+        def _build_model_dock(self, dock):
+            props = ttk.Frame(dock, padding=(2, 2))
+            dock.add(props, text='Properties')
+            _sheet, group, row = self._dock_sheet(props)
+            group('Object')
+            row('File', value=self.dock_file)
+            row('Type', value=self.dock_kind)
+            row('Solid', build=lambda r: ttk.Checkbutton(
+                r, variable=self.solid, style='Sheet.TCheckbutton',
+                command=self.redraw).pack(side='right', padx=(2, 4)))
+            group('Transformation')
+            row('Yaw', value=self.dock_yaw)
+            row('Pitch', value=self.dock_pitch)
+            row('Zoom', value=self.dock_zoom)
+            ttk.Button(_sheet, text='Reset view', style='Tool.TButton',
+                       command=self.reset_view).pack(fill='x', padx=4, pady=(4, 3))
+            group('Actions')
+            ttk.Button(_sheet, text='Export OBJ…', style='Tool.TButton',
+                       command=self.do_export_one).pack(fill='x', padx=4, pady=(2, 2))
+            ttk.Button(_sheet, text='Replace with any OBJ…', style='Tool.TButton',
+                       command=self.do_replace_obj).pack(fill='x', padx=4, pady=(0, 4))
+
+            col = ttk.Frame(dock, padding=(4, 4))
+            dock.add(col, text='Collision')
+            _cs, cgroup, crow = self._dock_sheet(col)
+            cgroup('Collision')
+            crow('File', value=self.dock_collision)
+            crow('Triangles', value=self.dock_collision_tris)
+            ttk.Button(col, text='Export collision OBJ…', style='Tool.TButton',
+                       command=self.do_export_collision).pack(fill='x', pady=(4, 2))
+            ttk.Button(col, text='Generate from OBJ…', style='Tool.TButton',
+                       command=self.do_generate_collision).pack(fill='x', pady=(0, 2))
+            ttk.Label(col, justify='left', style='Hint.TLabel', text=(
+                'Collision geometry lives in level space.\n'
+                'Generate builds a .CVHM from a collision OBJ.')).pack(anchor='w', pady=(4, 0))
+
+            filep = ttk.Frame(dock, padding=(4, 4))
+            dock.add(filep, text='File')
+            _fs, fgroup, _frow = self._dock_sheet(filep)
+            fgroup('Current file')
+            tk.Label(_fs, textvariable=self.info, background='#ffffff',
+                     foreground='#000000', anchor='w', justify='left', wraplength=215,
+                     font=('Segoe UI', 9), padx=4, pady=4).pack(fill='x')
+            fgroup('Original file')
+            self.btn_revert = ttk.Button(filep, text='Revert file to original',
+                                         style='Tool.TButton', command=self.do_revert,
+                                         state='disabled')
+            self.btn_revert.pack(fill='x', pady=(4, 2))
+            ttk.Label(filep, justify='left', style='Hint.TLabel', text=(
+                'Reverting restores the copy kept in the _backup folder.')).pack(
+                anchor='w', pady=(2, 0))
+
         # ------------------------------------------------------------ layout
         def _build(self):
-            top = ttk.Frame(self, padding=6)
+            self._apply_mktb_theme()
+            self._build_menu()
+            self.info = tk.StringVar(
+                value='Choose a ROM and click Unpack, or pick an already-unpacked folder.')
+            self.dock_file = tk.StringVar(value='no file selected')
+            self.dock_kind = tk.StringVar(value='—')
+            self.dock_yaw = tk.StringVar(value='0.60')
+            self.dock_pitch = tk.StringVar(value='0.35')
+            self.dock_zoom = tk.StringVar(value='1.00')
+            self.dock_collision = tk.StringVar(value='no collision loaded')
+            self.dock_collision_tris = tk.StringVar(value='0')
+
+            # ---- top tool strip: ROM / work folder
+            top = ttk.Frame(self, padding=(6, 4, 6, 3))
             top.pack(fill='x')
             self.rom_var, self.work_var = tk.StringVar(), tk.StringVar()
-            ttk.Label(top, text='ROM (.nds):').grid(row=0, column=0, sticky='e')
-            ttk.Entry(top, textvariable=self.rom_var).grid(row=0, column=1, sticky='ew', padx=4)
-            ttk.Button(top, text='Browse…', command=self.pick_rom).grid(row=0, column=2)
-            ttk.Button(top, text='Unpack ROM', command=self.do_unpack).grid(row=0, column=3, padx=(8, 0))
-            ttk.Label(top, text='Work folder:').grid(row=1, column=0, sticky='e')
-            ttk.Entry(top, textvariable=self.work_var).grid(row=1, column=1, sticky='ew', padx=4, pady=3)
-            ttk.Button(top, text='Browse…', command=self.pick_work).grid(row=1, column=2)
-            ttk.Button(top, text='Repack ROM…', command=self.do_repack).grid(row=1, column=3, padx=(8, 0))
+            ttk.Label(top, text='ROM (.nds):').grid(row=0, column=0, sticky='e', padx=(0, 4))
+            ttk.Entry(top, textvariable=self.rom_var).grid(row=0, column=1, sticky='ew',
+                                                          padx=(0, 4))
+            ttk.Button(top, text='Browse…', style='Tool.TButton',
+                       command=self.pick_rom).grid(row=0, column=2, padx=(0, 3))
+            ttk.Button(top, text='Unpack ROM', style='Tool.TButton',
+                       command=self.do_unpack).grid(row=0, column=3)
+            ttk.Label(top, text='Work folder:').grid(row=1, column=0, sticky='e',
+                                                     padx=(0, 4), pady=(2, 0))
+            ttk.Entry(top, textvariable=self.work_var).grid(row=1, column=1, sticky='ew',
+                                                           padx=(0, 4), pady=(2, 0))
+            ttk.Button(top, text='Browse…', style='Tool.TButton',
+                       command=self.pick_work).grid(row=1, column=2, padx=(0, 3), pady=(2, 0))
+            ttk.Button(top, text='Repack ROM…', style='Tool.TButton',
+                       command=self.do_repack).grid(row=1, column=3, pady=(2, 0))
             top.columnconfigure(1, weight=1)
+            ttk.Separator(self, orient='horizontal').pack(fill='x')
+
+            # ---- bottom: status line + log dock (packed before the body)
+            status = ttk.Frame(self, padding=(6, 2))
+            status.pack(side='bottom', fill='x')
+            ttk.Label(status, textvariable=self.info, style='Status.TLabel',
+                      anchor='w').pack(side='left', fill='x', expand=True)
+
+            lf = ttk.Frame(self)
+            lf.pack(side='bottom', fill='x')
+            self.progress = ttk.Progressbar(lf, mode='indeterminate')
+            self.progress.pack(fill='x')
+            logbar = ttk.Frame(lf)
+            logbar.pack(fill='x')
+            ttk.Label(logbar, text='Log', style='DockHeader.TLabel').pack(
+                side='left', fill='x', expand=True)
+            self.log_text = tk.Text(lf, height=4, state='disabled', wrap='word',
+                                    background='#ffffff', foreground='#000000',
+                                    relief='solid', borderwidth=1,
+                                    font=('Consolas', 9))
+            self.log_text.pack(fill='x')
 
             body = ttk.PanedWindow(self, orient='horizontal')
-            body.pack(fill='both', expand=True, padx=6)
+            body.pack(fill='both', expand=True, padx=6, pady=(4, 4))
 
-            left = ttk.Frame(body)
+            # ---- left dock: file browser
+            left = ttk.Frame(body, width=250)
             body.add(left, weight=1)
+            ttk.Label(left, text='Files', style='DockHeader.TLabel').pack(fill='x')
+            fbar = ttk.Frame(left)
+            fbar.pack(fill='x', pady=(3, 0))
             self.filter_var = tk.StringVar()
             self.filter_var.trace_add('write', lambda *a: self.fill_tree())
-            ttk.Entry(left, textvariable=self.filter_var).pack(fill='x')
-            ttk.Label(left, text='filter files (e.g. .nsbmd, barrel, .txt)', foreground='gray').pack(anchor='w')
+            self.filter_entry = ttk.Entry(fbar, textvariable=self.filter_var)
+            self.filter_entry.pack(side='left', fill='x', expand=True)
+            ttk.Button(fbar, text='×', width=2, style='Small.TButton',
+                       command=lambda: self.filter_var.set('')).pack(side='left', padx=(2, 0))
+            ttk.Label(left, text='filter files (e.g. .nsbmd, barrel, .txt)',
+                      style='Hint.TLabel').pack(anchor='w', pady=(1, 3))
             tf = ttk.Frame(left)
             tf.pack(fill='both', expand=True)
             self.tree = ttk.Treeview(tf, show='tree', selectmode='browse')
@@ -491,38 +771,35 @@ if tk is not None:
             self.tree.pack(side='left', fill='both', expand=True)
             sb.pack(side='right', fill='y')
             self.tree.bind('<<TreeviewSelect>>', self.on_select)
-            ttk.Button(left, text='Export ALL models + collision (OBJ + PNG)…', command=self.do_export_all).pack(fill='x', pady=(4, 0))
+            ttk.Button(left, text='Export ALL models + collision…', style='Tool.TButton',
+                       command=self.do_export_all).pack(fill='x', pady=(4, 0))
 
+            # ---- right: document tabs
             right = ttk.Frame(body)
-            body.add(right, weight=3)
-            ir = ttk.Frame(right)
-            ir.pack(fill='x', pady=(0, 4))
-            self.info = tk.StringVar(value='Choose a ROM and click Unpack, or pick an already-unpacked folder.')
-            ttk.Label(ir, textvariable=self.info, wraplength=640, justify='left').pack(side='left', anchor='w')
-            self.btn_revert = ttk.Button(ir, text='Revert file to original', command=self.do_revert, state='disabled')
-            self.btn_revert.pack(side='right')
-            self.nb = ttk.Notebook(right)
+            body.add(right, weight=4)
+            self.nb = ttk.Notebook(right, style='Document.TNotebook')
             self.nb.pack(fill='both', expand=True)
 
-            # ---- model tab
+            # ---- model tab (viewport + property dock + bottom section tabs)
             mt = ttk.Frame(self.nb)
             self.nb.add(mt, text='Model')
-            bar = ttk.Frame(mt)
-            bar.pack(fill='x')
+            mp = ttk.PanedWindow(mt, orient='horizontal')
+            mp.pack(fill='both', expand=True)
+
+            vpf = ttk.Frame(mp)
+            mp.add(vpf, weight=4)
+            vbar = ttk.Frame(vpf)
+            vbar.pack(fill='x', pady=(2, 2))
             self.solid = tk.BooleanVar(value=True)
-            ttk.Checkbutton(bar, text='Solid', variable=self.solid, command=self.redraw).pack(side='left')
-            ttk.Button(bar, text='Reset view', command=self.reset_view).pack(side='left', padx=6)
-            ttk.Button(bar, text='Replace with any OBJ…', command=self.do_replace_obj).pack(side='right')
-            ttk.Button(bar, text='Export OBJ…', command=self.do_export_one).pack(side='right')
-            ttk.Label(bar, text='drag = rotate, right-drag = pan, wheel = zoom', foreground='gray').pack(side='left', padx=8)
-            cb = ttk.Frame(mt)
-            cb.pack(fill='x', pady=(3, 0))
-            ttk.Button(cb, text='Export collision OBJ…', command=self.do_export_collision).pack(side='left')
-            ttk.Button(cb, text='Generate collision from OBJ…',
-                       command=self.do_generate_collision).pack(side='left', padx=4)
-            ttk.Label(cb, text='(.CVHM files - collision geometry lives in level space)',
-                      foreground='gray').pack(side='left', padx=8)
-            self.canvas = tk.Canvas(mt, background='#202428', highlightthickness=0)
+            ttk.Checkbutton(vbar, text='Solid', variable=self.solid,
+                            command=self.redraw).pack(side='left')
+            ttk.Button(vbar, text='Reset view', style='Tool.TButton',
+                       command=self.reset_view).pack(side='left', padx=6)
+            ttk.Label(vbar, text='drag = rotate   right-drag = pan   wheel = zoom',
+                      style='Hint.TLabel').pack(side='right')
+
+            self.canvas = tk.Canvas(vpf, background='#000000', highlightthickness=1,
+                                    highlightbackground='#7a7a7a', borderwidth=0)
             self.canvas.pack(fill='both', expand=True)
             self.canvas.bind('<ButtonPress-1>', self.on_press)
             self.canvas.bind('<B1-Motion>', self.on_drag)
@@ -535,12 +812,39 @@ if tk is not None:
             self.canvas.bind('<Button-5>', lambda e: self.zoom_by(1 / 1.1))
             self.canvas.bind('<Configure>', lambda e: self.redraw())
 
+            # MKTB-style bottom section strip under the viewport
+            vd = ttk.Notebook(vpf, style='Section.TNotebook')
+            vd.pack(fill='x', pady=(2, 0))
+            colpage = ttk.Frame(vd, padding=(4, 3))
+            vd.add(colpage, text='Collision')
+            ttk.Button(colpage, text='Export collision OBJ…', style='Tool.TButton',
+                       command=self.do_export_collision).pack(side='left')
+            ttk.Button(colpage, text='Generate from OBJ…', style='Tool.TButton',
+                       command=self.do_generate_collision).pack(side='left', padx=4)
+            ttk.Label(colpage, text='.CVHM files - collision geometry lives in level space',
+                      style='Hint.TLabel').pack(side='left', padx=8)
+            campage = ttk.Frame(vd, padding=(4, 3))
+            vd.add(campage, text='Camera')
+            ttk.Button(campage, text='Reset view', style='Tool.TButton',
+                       command=self.reset_view).pack(side='left')
+            ttk.Label(campage, text='1 pixel = 0.01 rad, wheel zooms around the view centre',
+                      style='Hint.TLabel').pack(side='left', padx=8)
+
+            dock = ttk.Notebook(mp, style='Dock.TNotebook')
+            mp.add(dock, weight=1)
+            dock.configure(width=250)
+            self.model_dock = dock
+            self._build_model_dock(dock)
+
             # ---- texture tab
             tt = ttk.Frame(self.nb)
             self.nb.add(tt, text='Textures')
             tl = ttk.Frame(tt)
             tl.pack(side='left', fill='y')
-            self.texlist = tk.Listbox(tl, width=38, exportselection=False)
+            self.texlist = tk.Listbox(tl, width=34, exportselection=False,
+                                      background='#ffffff', foreground='#000000',
+                                      selectbackground='#3399ff', selectforeground='#ffffff',
+                                      relief='solid', borderwidth=1, font=('Segoe UI', 9))
             self.texlist.pack(side='left', fill='y')
             tsb = ttk.Scrollbar(tl, command=self.texlist.yview)
             self.texlist.configure(yscrollcommand=tsb.set)
@@ -560,7 +864,8 @@ if tk is not None:
             ttk.Button(pr, text='Save PNG…', command=self.save_texture).pack(side='right')
             self.tex_info = tk.StringVar()
             ttk.Label(tr, textvariable=self.tex_info, wraplength=520, justify='left').pack(anchor='w', pady=2)
-            self.tex_canvas = tk.Canvas(tr, background='#303030', highlightthickness=0)
+            self.tex_canvas = tk.Canvas(tr, background='#303030', highlightthickness=1,
+                                        highlightbackground='#7a7a7a')
             self.tex_canvas.pack(fill='both', expand=True)
 
             # ---- text tab
@@ -575,7 +880,9 @@ if tk is not None:
             ttk.Button(xtb, text='Reload', command=self.reload_text).pack(side='right', padx=4)
             txtf = ttk.Frame(xt)
             txtf.pack(fill='both', expand=True)
-            self.text = tk.Text(txtf, wrap='word', font=('Courier', 11), undo=True)
+            self.text = tk.Text(txtf, wrap='word', font=('Consolas', 10), undo=True,
+                                background='#ffffff', foreground='#000000',
+                                insertbackground='#000000', relief='solid', borderwidth=1)
             xsb = ttk.Scrollbar(txtf, command=self.text.yview)
             self.text.configure(yscrollcommand=xsb.set)
             self.text.pack(side='left', fill='both', expand=True)
@@ -592,28 +899,35 @@ if tk is not None:
             ttk.Button(rbar, text='Zoom to room', command=self.zoom_room).pack(side='left', padx=4)
             self.rooms_hint = tk.StringVar(
                 value='Open a level\'s Global.ROO in the list on the left to see and edit its room boxes.')
-            ttk.Label(rt, textvariable=self.rooms_hint, foreground='#606060', wraplength=780,
+            ttk.Label(rt, textvariable=self.rooms_hint, style='Hint.TLabel', wraplength=780,
                       justify='left').pack(anchor='w', pady=(4, 4))
+            # Pack the selected-box editor first (bottom) so it keeps its space
+            # when the window is short; the 3D view and table shrink instead.
+            self.room_entries = []
+            ef = ttk.LabelFrame(rt, text=' Selected room box (level units, stored with 1/4096 precision) ',
+                                padding=6)
+            ef.pack(side='bottom', fill='x', pady=(6, 0))
+            for k, ax in enumerate(('X', 'Y', 'Z')):
+                ttk.Label(ef, text=ax).grid(row=0, column=k + 1)
+            ttk.Label(ef, text='Min').grid(row=1, column=0, sticky='e', padx=(0, 6))
+            ttk.Label(ef, text='Max').grid(row=2, column=0, sticky='e', padx=(0, 6))
+            for i in range(6):
+                ent = ttk.Entry(ef, textvariable=self.room_vars[i], width=13)
+                ent.grid(row=1 + i // 3, column=1 + i % 3, padx=3, pady=2, sticky='w')
+                self.room_entries.append(ent)
+            ttk.Button(ef, text='Apply box and save', command=self.apply_room_box).grid(
+                row=1, column=4, rowspan=2, padx=(10, 0))
+            ttk.Label(ef, style='Hint.TLabel', text=(
+                'The game only runs collision inside the room the player is in, so a box must contain the '
+                'walkable area. "Apply" writes the file (a backup is kept); Repack the ROM to test it.'),
+                wraplength=780, justify='left').grid(row=3, column=0, columnspan=5, sticky='w', pady=(4, 0))
+
             rf = ttk.PanedWindow(rt, orient='vertical')
             rf.pack(fill='both', expand=True)
-            tablef = ttk.Frame(rf)
-            rf.add(tablef, weight=3)
-            cols = ('idx', 'name', 'flags', 'x0', 'y0', 'z0', 'x1', 'y1', 'z1', 'size')
-            heads = ('#', 'room', 'flags', 'min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z', 'size (X x Y x Z)')
-            widths = (34, 130, 52, 66, 66, 66, 66, 66, 66, 150)
-            self.room_tree = ttk.Treeview(tablef, columns=cols, show='headings', selectmode='browse', height=8)
-            for c, hd, wd in zip(cols, heads, widths):
-                self.room_tree.heading(c, text=hd)
-                self.room_tree.column(c, width=wd, stretch=False, anchor='w' if c == 'name' else 'center')
-            rsb = ttk.Scrollbar(tablef, command=self.room_tree.yview)
-            self.room_tree.configure(yscrollcommand=rsb.set)
-            self.room_tree.pack(side='left', fill='both', expand=True)
-            rsb.pack(side='right', fill='y')
-            self.room_tree.bind('<<TreeviewSelect>>', self.on_room_select)
-            self.room_entries = []
             viewf = ttk.Frame(rf)
-            rf.add(viewf, weight=2)
-            self.room_canvas = tk.Canvas(viewf, background='#202428', highlightthickness=0, height=230)
+            rf.add(viewf, weight=3)
+            self.room_canvas = tk.Canvas(viewf, background='#000000', highlightthickness=1,
+                                         highlightbackground='#7a7a7a', height=210)
             self.room_canvas.pack(fill='both', expand=True)
             self.room_canvas.bind('<ButtonPress-1>', self.on_press)
             self.room_canvas.bind('<B1-Motion>', self.on_drag)
@@ -625,24 +939,21 @@ if tk is not None:
             self.room_canvas.bind('<Button-4>', lambda e: self.zoom_by(1.1))
             self.room_canvas.bind('<Button-5>', lambda e: self.zoom_by(1 / 1.1))
             self.room_canvas.bind('<Configure>', lambda e: self.redraw())
-            ef = ttk.LabelFrame(rt, text=' Selected room box (level units, stored with 1/4096 precision) ',
-                                padding=6)
-            ef.pack(fill='x', pady=(6, 0))
-            for k, ax in enumerate(('X', 'Y', 'Z')):
-                ttk.Label(ef, text=ax).grid(row=0, column=k + 1)
-            ttk.Label(ef, text='Min').grid(row=1, column=0, sticky='e', padx=(0, 6))
-            ttk.Label(ef, text='Max').grid(row=2, column=0, sticky='e', padx=(0, 6))
-            for i in range(6):
-                ent = ttk.Entry(ef, textvariable=self.room_vars[i], width=13)
-                ent.grid(row=1 + i // 3, column=1 + i % 3, padx=3, pady=2, sticky='w')
-                self.room_entries.append(ent)
+            tablef = ttk.Frame(rf)
+            rf.add(tablef, weight=2)
+            cols = ('idx', 'name', 'flags', 'x0', 'y0', 'z0', 'x1', 'y1', 'z1', 'size')
+            heads = ('#', 'room', 'flags', 'min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z', 'size (X x Y x Z)')
+            widths = (34, 130, 52, 66, 66, 66, 66, 66, 66, 150)
+            self.room_tree = ttk.Treeview(tablef, columns=cols, show='headings', selectmode='browse', height=6)
+            for c, hd, wd in zip(cols, heads, widths):
+                self.room_tree.heading(c, text=hd)
+                self.room_tree.column(c, width=wd, stretch=False, anchor='w' if c == 'name' else 'center')
+            rsb = ttk.Scrollbar(tablef, command=self.room_tree.yview)
+            self.room_tree.configure(yscrollcommand=rsb.set)
+            self.room_tree.pack(side='left', fill='both', expand=True)
+            rsb.pack(side='right', fill='y')
+            self.room_tree.bind('<<TreeviewSelect>>', self.on_room_select)
             self.room_tree.bind('<Double-1>', lambda e: self.room_entries[0].focus_set())
-            ttk.Button(ef, text='Apply box and save', command=self.apply_room_box).grid(
-                row=1, column=4, rowspan=2, padx=(10, 0))
-            ttk.Label(ef, foreground='#606060', text=(
-                'The game only runs collision inside the room the player is in, so a box must contain the '
-                'walkable area. "Apply" writes the file (a backup is kept); Repack the ROM to test it.'),
-                wraplength=780, justify='left').grid(row=3, column=0, columnspan=5, sticky='w', pady=(4, 0))
 
             # ---- placement tab (Objects.LP)
             pt = ttk.Frame(self.nb)
@@ -665,9 +976,16 @@ if tk is not None:
                 'weapons, waypoints, trigger boxes (flags 0/2), the patrol path graph (flags 5) and the '
                 'enemy spawn points with their facing (flags 8). Positions are 12.12 fixed point in the '
                 'same space as the collision and models.'))
-            ttk.Label(pt, textvariable=self.lp_hint, foreground='#606060', wraplength=780,
+            ttk.Label(pt, textvariable=self.lp_hint, style='Hint.TLabel', wraplength=780,
                       justify='left').pack(anchor='w', pady=(4, 4))
-            self.lp_canvas = tk.Canvas(pt, background='#202428', highlightthickness=0, height=250)
+            # The section tabs (table + editor) are packed first, from the bottom,
+            # so the table and edited values stay reachable when the window is
+            # short; the 3D view above shrinks instead.
+            inner = ttk.Notebook(pt, style='Section.TNotebook')
+            inner.pack(side='bottom', fill='x', pady=(3, 0))
+            self.lp_inner = inner
+            self.lp_canvas = tk.Canvas(pt, background='#000000', highlightthickness=1,
+                                       highlightbackground='#7a7a7a', height=220)
             self.lp_canvas.pack(fill='both', expand=True)
             self.lp_canvas.bind('<ButtonPress-1>', self.on_press)
             self.lp_canvas.bind('<B1-Motion>', self.on_drag)
@@ -679,89 +997,78 @@ if tk is not None:
             self.lp_canvas.bind('<Button-4>', lambda e: self.zoom_by(1.1))
             self.lp_canvas.bind('<Button-5>', lambda e: self.zoom_by(1 / 1.1))
             self.lp_canvas.bind('<Configure>', lambda e: self.redraw())
-            inner = ttk.Notebook(pt)
-            inner.pack(fill='both', expand=True, pady=(4, 0))
-            self.lp_inner = inner
 
             # ---- placements page
             pp = ttk.Frame(inner)
             inner.add(pp, text='Placements')
+            # Editor first (bottom) so it keeps its space on short windows.
+            ppan = ttk.LabelFrame(pp, text=' Selected placement ', padding=6)
+            ppan.pack(side='bottom', fill='x', pady=(6, 0))
+            for k, ax in enumerate(('X', 'Y', 'Z')):
+                ttk.Label(ppan, text=ax).grid(row=0, column=k + 1)
+            ttk.Label(ppan, text='Position').grid(row=1, column=0, sticky='e', padx=(0, 6))
+            for i in range(3):
+                ent = ttk.Entry(ppan, textvariable=self.lp_vars[i], width=10)
+                ent.grid(row=1, column=1 + i, padx=3, pady=2, sticky='w')
+            ttk.Label(ppan, text='Facing').grid(row=2, column=0, sticky='e', padx=(0, 6))
+            self.lp_angle_ent = ttk.Entry(ppan, textvariable=self.lp_vars[3], width=10)
+            self.lp_angle_ent.grid(row=2, column=1, padx=3, pady=2, sticky='w')
+            ttk.Label(ppan, text='brads').grid(row=2, column=2, columnspan=2,
+                                               sticky='w', padx=3)
+            ttk.Label(ppan, text='Box').grid(row=2, column=3, sticky='e')
+            self.lp_box_vars = [tk.StringVar() for _ in range(3)]     # half X, half Z, height
+            for i in range(3):
+                ttk.Entry(ppan, textvariable=self.lp_box_vars[i], width=7).grid(
+                    row=2, column=4 + i, padx=3, pady=2, sticky='w')
+            ttk.Label(ppan, text='size').grid(row=2, column=7, sticky='w')
+            ttk.Button(ppan, text='Apply and save', command=self.lp_apply_save).grid(
+                row=1, column=8, rowspan=2, padx=(10, 0))
+            ttk.Label(ppan, style='Hint.TLabel', text=(
+                'Coordinates are the level\'s world space. "Apply and save" rewrites the file (a backup is '
+                'kept); repack the ROM to test it. Facing uses brads (4096 = 360°); the box stores '
+                'half X, half Z and height.'), wraplength=740, justify='left').grid(
+                row=3, column=0, columnspan=10, sticky='w', pady=(4, 0))
+
             pf = ttk.PanedWindow(pp, orient='vertical')
             pf.pack(fill='both', expand=True)
             tablef = ttk.Frame(pf)
             pf.add(tablef, weight=3)
+            ptool = ttk.Frame(tablef)
+            ptool.pack(fill='x')
+            ttk.Button(ptool, text='+', width=3, style='Small.TButton',
+                       command=self.lp_add_placement).pack(side='left')
+            ttk.Button(ptool, text='−', width=3, style='Small.TButton',
+                       command=self.lp_delete_placement).pack(side='left', padx=2)
+            ttk.Button(ptool, text='⧉', width=3, style='Small.TButton',
+                       command=self.lp_duplicate_placement).pack(side='left')
+            ttk.Button(ptool, text='◎', width=3, style='Small.TButton',
+                       command=self.lp_focus_sel).pack(side='left', padx=2)
+            ttk.Label(ptool, text='add / delete / duplicate / focus',
+                      style='Hint.TLabel').pack(side='left', padx=6)
+            ptreef = ttk.Frame(tablef)
+            ptreef.pack(fill='both', expand=True)
             cols = ('idx', 'h1', 'name', 'template', 'x', 'y', 'z')
             heads = ('#', 'id', 'name (CodeStrings.CHR)', 'template', 'X', 'Y', 'Z')
             widths = (34, 44, 150, 200, 70, 70, 70)
-            self.lp_place_tree = ttk.Treeview(tablef, columns=cols, show='headings', selectmode='browse',
-                                               height=8)
+            self.lp_place_tree = ttk.Treeview(ptreef, columns=cols, show='headings',
+                                               selectmode='browse', height=6)
             for c, hd, wd in zip(cols, heads, widths):
                 self.lp_place_tree.heading(c, text=hd)
                 self.lp_place_tree.column(c, width=wd, stretch=(c == 'template'),
                                           anchor='w' if c in ('name', 'template') else 'center')
-            tsb = ttk.Scrollbar(tablef, command=self.lp_place_tree.yview)
+            tsb = ttk.Scrollbar(ptreef, command=self.lp_place_tree.yview)
             self.lp_place_tree.configure(yscrollcommand=tsb.set)
             self.lp_place_tree.pack(side='left', fill='both', expand=True)
             tsb.pack(side='right', fill='y')
             self.lp_place_tree.bind('<<TreeviewSelect>>', self.on_lp_place_select)
             self.lp_place_tree.bind('<Double-1>', lambda e: self.lp_focus_sel())
-            ppan = ttk.LabelFrame(pp, text=' Selected placement ', padding=6)
-            ppan.pack(fill='x', pady=(6, 0))
-            for k, ax in enumerate(('X', 'Y', 'Z')):
-                ttk.Label(ppan, text=ax).grid(row=0, column=k + 1)
-            ttk.Label(ppan, text='Position').grid(row=1, column=0, sticky='e', padx=(0, 6))
-            for i in range(3):
-                ent = ttk.Entry(ppan, textvariable=self.lp_vars[i], width=11)
-                ent.grid(row=1, column=1 + i, padx=3, pady=2, sticky='w')
-            ttk.Label(ppan, text='Facing').grid(row=2, column=0, sticky='e', padx=(0, 6))
-            self.lp_angle_ent = ttk.Entry(ppan, textvariable=self.lp_vars[3], width=11)
-            self.lp_angle_ent.grid(row=2, column=1, padx=3, pady=2, sticky='w')
-            ttk.Label(ppan, text='brads (4096 = 360°)').grid(row=2, column=2, columnspan=2,
-                                                            sticky='w', padx=3)
-            ttk.Label(ppan, text='Box').grid(row=2, column=3, sticky='e')
-            self.lp_box_vars = [tk.StringVar() for _ in range(3)]     # half X, half Z, height
-            for i in range(3):
-                ttk.Entry(ppan, textvariable=self.lp_box_vars[i], width=8).grid(
-                    row=2, column=4 + i, padx=3, pady=2, sticky='w')
-            ttk.Label(ppan, text='half X / half Z / height').grid(row=2, column=7, sticky='w')
-            ttk.Button(ppan, text='Apply and save', command=self.lp_apply_save).grid(
-                row=1, column=8, rowspan=2, padx=(10, 0))
-            qb = ttk.Frame(ppan)
-            qb.grid(row=3, column=0, columnspan=10, sticky='w', pady=(6, 0))
-            ttk.Button(qb, text='Add placement…', command=self.lp_add_placement).pack(side='left')
-            ttk.Button(qb, text='Duplicate placement…', command=self.lp_duplicate_placement).pack(
-                side='left', padx=6)
-            ttk.Button(qb, text='Delete placement', command=self.lp_delete_placement).pack(side='left')
-            ttk.Label(ppan, foreground='#606060', text=(
-                'Coordinates are the level\'s world space. "Apply and save" rewrites the file (a backup is '
-                'kept); repack the ROM to test it. Enemies store a facing; trigger boxes store a '
-                'centred box.')).grid(row=4, column=0, columnspan=10, sticky='w', pady=(4, 0))
 
             # ---- paths page
             qp = ttk.Frame(inner)
             inner.add(qp, text='Paths')
-            qf = ttk.PanedWindow(qp, orient='vertical')
-            qf.pack(fill='both', expand=True)
-            qtablef = ttk.Frame(qf)
-            qf.add(qtablef, weight=3)
-            qcols = ('node', 'x', 'y', 'z', 'deg')
-            qheads = ('node', 'X', 'Y', 'Z', 'links')
-            qwidths = (60, 90, 90, 90, 60)
-            self.lp_path_tree = ttk.Treeview(qtablef, columns=qcols, show='tree headings',
-                                             selectmode='browse', height=9)
-            self.lp_path_tree.heading('#0', text='path')
-            self.lp_path_tree.column('#0', width=170, stretch=True, anchor='w')
-            for c, hd, wd in zip(qcols, qheads, qwidths):
-                self.lp_path_tree.heading(c, text=hd)
-                self.lp_path_tree.column(c, width=wd, stretch=False, anchor='center')
-            qsb = ttk.Scrollbar(qtablef, command=self.lp_path_tree.yview)
-            self.lp_path_tree.configure(yscrollcommand=qsb.set)
-            self.lp_path_tree.pack(side='left', fill='both', expand=True)
-            qsb.pack(side='right', fill='y')
-            self.lp_path_tree.bind('<<TreeviewSelect>>', self.on_lp_path_select)
-            self.lp_path_tree.bind('<Double-1>', lambda e: self.lp_focus_sel())
+            # Editor first (bottom) so it keeps its space on short windows.
             qpan = ttk.LabelFrame(qp, text=' Selected path node ', padding=6)
-            qpan.pack(fill='x', pady=(6, 0))
+            qpan.pack(side='bottom', fill='x', pady=(6, 0))
             for k, ax in enumerate(('X', 'Y', 'Z')):
                 ttk.Label(qpan, text=ax).grid(row=0, column=k + 1)
             self.lp_pvars = [tk.StringVar() for _ in range(3)]
@@ -770,27 +1077,50 @@ if tk is not None:
                     row=1, column=1 + i, padx=3, pady=2, sticky='w')
             ttk.Button(qpan, text='Apply and save', command=self.lp_path_apply_save).grid(
                 row=1, column=4, padx=(10, 0))
-            qb2 = ttk.Frame(qpan)
-            qb2.grid(row=2, column=0, columnspan=5, sticky='w', pady=(6, 0))
-            ttk.Button(qb2, text='Add node', command=self.lp_path_add_node).pack(side='left')
-            ttk.Button(qb2, text='Remove node', command=self.lp_path_del_node).pack(side='left', padx=4)
-            ttk.Button(qb2, text='Add path', command=self.lp_path_add_path).pack(side='left', padx=4)
-            ttk.Button(qb2, text='Delete path', command=self.lp_path_del_path).pack(side='left', padx=4)
-            qb3 = ttk.Frame(qpan)
-            qb3.grid(row=3, column=0, columnspan=5, sticky='w', pady=(4, 0))
-            ttk.Button(qb3, text='Link nodes…', command=self.lp_path_add_edge).pack(side='left')
-            ttk.Button(qb3, text='Unlink', command=self.lp_path_del_edge).pack(side='left', padx=4)
-            ttk.Label(qb3, foreground='#606060', text=(
-                '  Edges are stored in both directions and their lengths are rewritten when you apply. '
-                'The AI uses these graphs to walk patrol routes.')).pack(side='left', padx=6)
+            ttk.Label(qpan, style='Hint.TLabel', text=(
+                'Edges are stored in both directions and their lengths are rewritten when you apply. '
+                'The AI uses these graphs to walk patrol routes.'), wraplength=740,
+                justify='left').grid(
+                row=2, column=0, columnspan=5, sticky='w', pady=(4, 0))
 
-            # ---- log
-            lf = ttk.Frame(self, padding=(6, 4))
-            lf.pack(fill='x')
-            self.progress = ttk.Progressbar(lf, mode='indeterminate')
-            self.progress.pack(fill='x')
-            self.log_text = tk.Text(lf, height=7, state='disabled', wrap='word')
-            self.log_text.pack(fill='x', pady=(4, 0))
+            qf = ttk.PanedWindow(qp, orient='vertical')
+            qf.pack(fill='both', expand=True)
+            qtablef = ttk.Frame(qf)
+            qf.add(qtablef, weight=3)
+            qtool = ttk.Frame(qtablef)
+            qtool.pack(fill='x')
+            ttk.Button(qtool, text='+', width=3, style='Small.TButton',
+                       command=self.lp_path_add_node).pack(side='left')
+            ttk.Button(qtool, text='−', width=3, style='Small.TButton',
+                       command=self.lp_path_del_node).pack(side='left', padx=2)
+            ttk.Button(qtool, text='+P', width=3, style='Small.TButton',
+                       command=self.lp_path_add_path).pack(side='left')
+            ttk.Button(qtool, text='−P', width=3, style='Small.TButton',
+                       command=self.lp_path_del_path).pack(side='left', padx=2)
+            ttk.Button(qtool, text='⇄', width=3, style='Small.TButton',
+                       command=self.lp_path_add_edge).pack(side='left')
+            ttk.Button(qtool, text='⇎', width=3, style='Small.TButton',
+                       command=self.lp_path_del_edge).pack(side='left', padx=2)
+            ttk.Label(qtool, text='node add/remove, path add/remove, link/unlink',
+                      style='Hint.TLabel').pack(side='left', padx=6)
+            qtreef = ttk.Frame(qtablef)
+            qtreef.pack(fill='both', expand=True)
+            qcols = ('node', 'x', 'y', 'z', 'deg')
+            qheads = ('node', 'X', 'Y', 'Z', 'links')
+            qwidths = (60, 90, 90, 90, 60)
+            self.lp_path_tree = ttk.Treeview(qtreef, columns=qcols, show='tree headings',
+                                             selectmode='browse', height=7)
+            self.lp_path_tree.heading('#0', text='path')
+            self.lp_path_tree.column('#0', width=170, stretch=True, anchor='w')
+            for c, hd, wd in zip(qcols, qheads, qwidths):
+                self.lp_path_tree.heading(c, text=hd)
+                self.lp_path_tree.column(c, width=wd, stretch=False, anchor='center')
+            qsb = ttk.Scrollbar(qtreef, command=self.lp_path_tree.yview)
+            self.lp_path_tree.configure(yscrollcommand=qsb.set)
+            self.lp_path_tree.pack(side='left', fill='both', expand=True)
+            qsb.pack(side='right', fill='y')
+            self.lp_path_tree.bind('<<TreeviewSelect>>', self.on_lp_path_select)
+            self.lp_path_tree.bind('<Double-1>', lambda e: self.lp_focus_sel())
 
         def report_callback_exception(self, exc, val, tb):
             msg = ''.join(traceback.format_exception(exc, val, tb))
@@ -940,6 +1270,15 @@ if tk is not None:
         def load_path(self, path, tex_index=None):
             low = path.lower()
             self.cur_path = path
+            self.dock_file.set(os.path.basename(path))
+            self.dock_kind.set(
+                'text' if low.endswith('.txt') else
+                'collision' if low.endswith('.cvhm') else
+                'placement' if low.endswith('.lp') else
+                'rooms' if low.endswith('.roo') else
+                'model' if low.endswith(('.nsbmd', '.nsbtx')) else 'file')
+            self.dock_collision.set('no collision loaded')
+            self.dock_collision_tris.set('0')
             self.loaded = None
             self.collision = None
             self.roo = None
@@ -997,6 +1336,8 @@ if tk is not None:
                     return
                 self.collision = col
                 self.view_tris = col.triangles()
+                self.dock_collision.set(name)
+                self.dock_collision_tris.set(str(len(self.view_tris)))
                 self.view = bounds(self.view_tris)
                 self.base_view = self.view
                 parts = ', '.join('%s: %d verts / %d tris' % (m.name, len(m.verts), len(m.tris))
@@ -2080,6 +2421,10 @@ if tk is not None:
             self.redraw(fast=True)
 
         def redraw(self, fast=False):
+            if getattr(self, 'dock_yaw', None) is not None:
+                self.dock_yaw.set('%.2f' % self.yaw)
+                self.dock_pitch.set('%.2f' % self.pitch)
+                self.dock_zoom.set('%.3f' % self.zoom)
             c = self.canvas
             c.delete('all')
             w, h = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
