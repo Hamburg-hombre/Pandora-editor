@@ -23,6 +23,8 @@ Window layout (classic Windows / Mario Kart Toolbox style)
     Ctrl+O opens a ROM; Ctrl+S saves the open text file.
   - Left dock: the "Files" tree, its filter and "Export ALL models + collision...".
   - Main document tabs: Model, Textures, Text, Rooms (.ROO), Placement (.LP), Data, Names (.CHR).
+    Only the tabs that apply to the selected file are shown: a model shows Model + Textures,
+    a .cvhm shows Model, a .txt/.lvl shows Text, a .chr shows Names, and so on.
   - Model tab: a large black 3D viewport, a right-hand Properties / Collision / File dock, and
     Collision / Camera section tabs under the viewport.
   - Tables use the classic white grid with grey headings; the status line and Log dock are at the

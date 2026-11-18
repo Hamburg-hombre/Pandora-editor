@@ -607,7 +607,8 @@ if tk is not None:
         def _show_controls(self):
             messagebox.showinfo('Controls', (
                 'File list\n'
-                '  Click a file to open it. Filter box narrows the list.\n\n'
+                '  Click a file to open it. Filter box narrows the list.\n'
+                '  The document tabs change to show only the ones that apply.\n\n'
                 '3D viewport\n'
                 '  Left-drag = rotate, right-drag = pan, wheel = zoom.\n'
                 '  "Solid" toggles filled triangles; "Reset view" recentres.\n\n'
@@ -1302,6 +1303,60 @@ if tk is not None:
             self.chr_tree.bind('<<TreeviewSelect>>', self.on_chr_select)
             self.chr_tree.bind('<Double-1>', lambda e: self.chr_entry.focus_set())
 
+            # Document tabs are hidden/shown per selected file type. Hiding a tab
+            # keeps it in Notebook.tabs(), so the hard-coded indices used when a
+            # file loads stay valid.
+            self.doc_tabs = {
+                'model': (mt, 'Model'),
+                'textures': (tt, 'Textures'),
+                'text': (xt, 'Text'),
+                'rooms': (rt, 'Rooms (.ROO)'),
+                'placement': (pt, 'Placement (.LP)'),
+                'data': (dt, 'Data'),
+                'names': (ct, 'Names (.CHR)'),
+            }
+            self.doc_tab_hidden = {key: False for key in self.doc_tabs}
+
+        # ------------------------------------------------------- document tabs
+        def _set_doc_tabs(self, *keys):
+            """Show only the document tabs relevant to the selected file."""
+            wanted = set(keys) if keys else set(self.doc_tabs)
+            for key, (widget, text) in self.doc_tabs.items():
+                show = key in wanted
+                hidden = self.doc_tab_hidden[key]
+                if show and hidden:
+                    self.nb.add(widget, text=text)
+                    self.doc_tab_hidden[key] = False
+                elif not show and not hidden:
+                    self.nb.hide(widget)
+                    self.doc_tab_hidden[key] = True
+
+        def _show_doc_tabs_for(self, path):
+            low = path.lower()
+            if low.endswith('.chr'):
+                tabs = ('names',)
+            elif extra_files.is_data_file(path):
+                tabs = ('data',)
+            elif low.endswith(('.txt', '.lvl')):
+                tabs = ('text',)
+            elif low.endswith('.cvhm'):
+                tabs = ('model',)
+            elif low.endswith('.lp'):
+                tabs = ('placement',)
+            elif low.endswith('.roo'):
+                tabs = ('rooms',)
+            elif low.endswith('.nsbtx'):
+                tabs = ('textures',)
+            elif low.endswith('.nsbmd'):
+                tabs = ('model', 'textures')
+            else:
+                tabs = None                 # unsupported: leave every tab available
+            self._set_doc_tabs(*(tabs or ()))
+            if tabs:
+                # Until the loader selects its own tab, show the primary one even
+                # if the file turns out to be malformed.
+                self.nb.select(self.doc_tabs[tabs[0]][0])
+
         def report_callback_exception(self, exc, val, tb):
             msg = ''.join(traceback.format_exception(exc, val, tb))
             try:
@@ -1464,6 +1519,7 @@ if tk is not None:
                 'image' if low.endswith(('.char', '.plt', '.ico')) else
                 'data' if low.endswith(('.crt', '.nsbca', '.nslbc', '.tex')) else
                 'model' if low.endswith(('.nsbmd', '.nsbtx')) else 'file')
+            self._show_doc_tabs_for(path)
             self.dock_collision.set('no collision loaded')
             self.dock_collision_tris.set('0')
             self.loaded = None
