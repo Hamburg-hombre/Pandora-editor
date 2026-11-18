@@ -5,7 +5,7 @@ Run:  python pandora_editor.py
 Needs: Python 3.8+, Pillow and numpy (pip install pillow numpy). Tkinter ships with Python on
 Windows/macOS (Linux: sudo apt install python3-tk).
 Keep this file in the same folder as nitro.py, scene.py, nitro_write.py, nds_unpack.py,
-nds_repack.py, export_models.py and collision.py.
+nds_repack.py, export_models.py, collision.py, objects_lp.py and extra_files.py.
 """
 import os, sys, math, threading, queue, traceback, subprocess, platform
 
@@ -46,7 +46,7 @@ except ImportError:
 
 try:
     import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox
+    from tkinter import ttk, filedialog, messagebox, colorchooser
     import tkinter.font as tkfont
     from PIL import ImageTk
 except ImportError:          # headless use (tests); main() explains the problem
@@ -56,6 +56,7 @@ try:
     from nitro import *          # noqa
     import nds_unpack, nds_repack, export_models, collision
     import objects_lp as lpmod
+    import extra_files
 except Exception as _e:
     _fatal('Could not load the tool files (%s: %s).\nKeep ALL the .py files from the zip in the same folder.'
            % (type(_e).__name__, _e))
@@ -457,6 +458,13 @@ if tk is not None:
             self.text_path = None
             self.text_info = None
             self.text_dirty = False
+            self.data = None
+            self.data_raw = b''
+            self.data_hex_off = 0
+            self.data_palette = None
+            self.data_char_raw = None
+            self.data_swatches = []
+            self.data_photo = None
             self._build()
             self.after(100, self._poll)
 
@@ -600,6 +608,10 @@ if tk is not None:
                 'Placement tab\n'
                 '  Click a row or a marker to select it; double-click to centre.\n'
                 '  + / − / duplicate / focus buttons sit above the table.\n\n'
+                'Data tab\n'
+                '  .char/.plt/.ico show a preview; Import PNG replaces the picture.\n'
+                '  .crt/.nsbca/.nslbc/.tex show info + a hex view; the patch box\n'
+                '  writes bytes at a hexadecimal offset. .lvl opens in the Text tab.\n\n'
                 'Files\n'
                 '  Edits are written in place and a copy is kept in _backup.\n'
                 '  Repack the ROM after editing to test in-game.'))
@@ -607,10 +619,10 @@ if tk is not None:
         def _show_about(self):
             messagebox.showinfo('About Pandora editor', (
                 'Pandora editor for GoldenEye: Rogue Agent (Nintendo DS).\n\n'
-                'Model, texture, text, room and Objects.LP editing, with a '
+                'Model, texture, text, room, placement and extra-file editing, with a '
                 'classic Windows layout inspired by Mario Kart Toolbox.\n\n'
                 'Keep this script next to nitro.py, scene.py, collision.py, '
-                'objects_lp.py and the other tool modules.'))
+                'objects_lp.py, extra_files.py and the other tool modules.'))
 
         def _dock_sheet(self, parent):
             """White property sheet with dark MKTB-style group headers."""
@@ -1122,6 +1134,111 @@ if tk is not None:
             self.lp_path_tree.bind('<<TreeviewSelect>>', self.on_lp_path_select)
             self.lp_path_tree.bind('<Double-1>', lambda e: self.lp_focus_sel())
 
+            # ---- data tab (.char .plt .ico .crt .nsbca .nslbc .tex)
+            dt = ttk.Frame(self.nb)
+            self.nb.add(dt, text='Data')
+            dbar = ttk.Frame(dt)
+            dbar.pack(fill='x')
+            self.data_label = tk.StringVar(value=(
+                'Open a .char, .plt, .ico, .crt, .nsbca, .nslbc or .tex file in the list on the left.'))
+            ttk.Label(dbar, textvariable=self.data_label).pack(side='left')
+            self.btn_data_reload = ttk.Button(dbar, text='Reload', command=self.reload_data)
+            self.btn_data_reload.pack(side='right')
+            self.btn_data_png = ttk.Button(dbar, text='Save PNG…', command=self.save_data_png,
+                                           state='disabled')
+            self.btn_data_png.pack(side='right', padx=4)
+            self.btn_data_import = ttk.Button(dbar, text='Import PNG…', command=self.import_data_png,
+                                              state='disabled')
+            self.btn_data_import.pack(side='right')
+
+            # Palette chips are shown only for .plt files.
+            self.data_pal_bar = ttk.Frame(dt)
+            palhdr = ttk.Frame(self.data_pal_bar)
+            palhdr.pack(fill='x')
+            ttk.Label(palhdr, text='Palette (click a colour to change it):').pack(side='left')
+            self.btn_pal_apply = ttk.Button(palhdr, text='Apply palette and save',
+                                            command=self.apply_data_palette)
+            self.btn_pal_apply.pack(side='left', padx=8)
+            chips = ttk.Frame(self.data_pal_bar)
+            chips.pack(fill='x', pady=(2, 2))
+            self.data_swatches = []
+            for i in range(16):
+                b = tk.Button(chips, text=str(i), width=2, relief='solid', borderwidth=1,
+                              font=('Consolas', 8),
+                              command=lambda i=i: self.edit_palette_color(i))
+                b.pack(side='left', padx=1)
+                self.data_swatches.append(b)
+            self.data_pal_bar.pack_forget()
+
+            pfb = ttk.LabelFrame(dt, text=' Byte patch (a backup is kept in _backup) ', padding=6)
+            pfb.pack(side='bottom', fill='x', pady=(6, 0))
+            ttk.Label(pfb, text='Offset (hex)').grid(row=0, column=0, sticky='e')
+            self.data_patch_off = tk.StringVar(value='0')
+            ttk.Entry(pfb, textvariable=self.data_patch_off, width=10).grid(
+                row=0, column=1, padx=4)
+            ttk.Label(pfb, text='Bytes (hex)').grid(row=0, column=2, sticky='e')
+            self.data_patch_bytes = tk.StringVar()
+            ttk.Entry(pfb, textvariable=self.data_patch_bytes, width=44).grid(
+                row=0, column=3, padx=4, sticky='ew')
+            ttk.Button(pfb, text='Apply patch', command=self.apply_data_patch).grid(
+                row=0, column=4, padx=(8, 0))
+            ttk.Label(pfb, style='Hint.TLabel', text=(
+                'Example: offset 200, bytes 00 FF 7A. The bytes are written into the file; '
+                'Reload re-reads it. The hex view below is read-only.'), wraplength=780,
+                justify='left').grid(row=1, column=0, columnspan=5, sticky='w', pady=(3, 0))
+            pfb.columnconfigure(3, weight=1)
+
+            db = ttk.PanedWindow(dt, orient='horizontal')
+            db.pack(fill='both', expand=True, pady=(4, 0))
+            self.data_split = db
+            dl = ttk.Frame(db)
+            db.add(dl, weight=2)
+            ttk.Label(dl, text='File information', style='DockHeader.TLabel').pack(fill='x')
+            smf = ttk.Frame(dl)
+            smf.pack(fill='both', expand=True)
+            self.data_summary = tk.Text(smf, width=48, wrap='word', state='disabled',
+                                        background='#ffffff', foreground='#000000',
+                                        relief='solid', borderwidth=1, font=('Consolas', 9))
+            ssb = ttk.Scrollbar(smf, command=self.data_summary.yview)
+            self.data_summary.configure(yscrollcommand=ssb.set)
+            self.data_summary.pack(side='left', fill='both', expand=True)
+            ssb.pack(side='right', fill='y')
+            dr = ttk.Frame(db)
+            db.add(dr, weight=5)
+            self.data_nb = ttk.Notebook(dr, style='Section.TNotebook')
+            self.data_nb.pack(fill='both', expand=True)
+            prev = ttk.Frame(self.data_nb, padding=2)
+            self.data_nb.add(prev, text='Preview')
+            self.data_note = tk.StringVar(value='')
+            ttk.Label(prev, textvariable=self.data_note, style='Hint.TLabel').pack(anchor='w')
+            self.data_preview = tk.Canvas(prev, background='#303030', highlightthickness=1,
+                                          highlightbackground='#7a7a7a')
+            self.data_preview.pack(fill='both', expand=True)
+            self.data_preview.bind('<Configure>', lambda e: self._draw_data_preview())
+            hx = ttk.Frame(self.data_nb, padding=2)
+            self.data_nb.add(hx, text='Bytes (hex)')
+            hbar = ttk.Frame(hx)
+            hbar.pack(fill='x')
+            ttk.Label(hbar, text='From offset (hex)').pack(side='left')
+            self.data_hex_off_var = tk.StringVar(value='0')
+            ttk.Entry(hbar, textvariable=self.data_hex_off_var, width=9).pack(side='left', padx=4)
+            ttk.Button(hbar, text='Go', width=4, style='Small.TButton',
+                       command=self.goto_data_hex).pack(side='left')
+            ttk.Button(hbar, text='◀ 8 KB', style='Small.TButton',
+                       command=lambda: self.page_data_hex(-1)).pack(side='left', padx=(8, 2))
+            ttk.Button(hbar, text='8 KB ▶', style='Small.TButton',
+                       command=lambda: self.page_data_hex(1)).pack(side='left')
+            self.data_hex_range = tk.StringVar(value='')
+            ttk.Label(hbar, textvariable=self.data_hex_range,
+                      style='Hint.TLabel').pack(side='left', padx=8)
+            self.data_hex = tk.Text(hx, wrap='none', state='disabled', font=('Consolas', 9),
+                                    background='#ffffff', foreground='#000000',
+                                    relief='solid', borderwidth=1)
+            hsb = ttk.Scrollbar(hx, command=self.data_hex.yview)
+            self.data_hex.configure(yscrollcommand=hsb.set)
+            self.data_hex.pack(side='left', fill='both', expand=True)
+            hsb.pack(side='right', fill='y')
+
         def report_callback_exception(self, exc, val, tb):
             msg = ''.join(traceback.format_exception(exc, val, tb))
             try:
@@ -1272,10 +1389,13 @@ if tk is not None:
             self.cur_path = path
             self.dock_file.set(os.path.basename(path))
             self.dock_kind.set(
+                'level text' if low.endswith('.lvl') else
                 'text' if low.endswith('.txt') else
                 'collision' if low.endswith('.cvhm') else
                 'placement' if low.endswith('.lp') else
                 'rooms' if low.endswith('.roo') else
+                'image' if low.endswith(('.char', '.plt', '.ico')) else
+                'data' if low.endswith(('.crt', '.nsbca', '.nslbc', '.tex')) else
                 'model' if low.endswith(('.nsbmd', '.nsbtx')) else 'file')
             self.dock_collision.set('no collision loaded')
             self.dock_collision_tris.set('0')
@@ -1313,9 +1433,10 @@ if tk is not None:
             self.pal_var.set('')
             self.tex_info.set('')
             self._set_text('', False)
+            self._clear_data()
             self.btn_revert.configure(state='normal' if self._has_backup(path) else 'disabled')
             name = os.path.basename(path)
-            if low.endswith('.txt'):
+            if low.endswith(('.txt', '.lvl')):
                 try:
                     txt, info = read_text_doc(path)
                 except Exception as e:
@@ -1325,8 +1446,17 @@ if tk is not None:
                 self._set_text(txt, True)
                 self.text_label.set('%s  (%s line endings, %s) - editable'
                                     % (name, 'CRLF' if info['newline'] == '\r\n' else 'LF', info['encoding']))
-                self.info.set('%s  -  text, %d lines, %d characters' % (name, txt.count('\n') + 1, len(txt)))
+                if low.endswith('.lvl'):
+                    sections = extra_files.lvl_sections(txt)
+                    self.info.set('%s  -  level text, %d section(s): %s'
+                                  % (name, len(sections), ', '.join(sections)))
+                else:
+                    self.info.set('%s  -  text, %d lines, %d characters'
+                                  % (name, txt.count('\n') + 1, len(txt)))
                 self.nb.select(2)
+                return
+            if extra_files.is_data_file(path):
+                self.load_data(path)
                 return
             if low.endswith('.cvhm'):
                 try:
@@ -1457,6 +1587,238 @@ if tk is not None:
                     'Reload', 'Discard the unsaved changes to %s?' % os.path.basename(self.text_path)):
                 return
             self.load_path(self.text_path)
+
+        # ------------------------------------------------------- data files view
+        def _set_readonly_text(self, widget, text):
+            widget.configure(state='normal')
+            widget.delete('1.0', 'end')
+            widget.insert('1.0', text)
+            widget.configure(state='disabled')
+
+        def _clear_data(self):
+            self.data = None
+            self.data_raw = b''
+            self.data_hex_off = 0
+            self.data_palette = None
+            self.data_char_raw = None
+            self.btn_data_import.configure(state='disabled')
+            self.btn_data_png.configure(state='disabled')
+            self.data_label.set('Open a .char, .plt, .ico, .crt, .nsbca, .nslbc or .tex file '
+                                'in the list on the left.')
+            self.data_note.set('')
+            self.data_pal_bar.pack_forget()
+            self._set_readonly_text(self.data_summary, '')
+            self.data_preview.delete('all')
+            self.data_photo = None
+            self._set_hex_text('', 0)
+
+        def load_data(self, path):
+            name = os.path.basename(path)
+            try:
+                ex = extra_files.open_extra(path)
+                raw = open(path, 'rb').read()
+            except Exception as e:
+                self.info.set('%s: could not read (%s)' % (name, e))
+                return
+            self.data = ex
+            self.data_raw = raw
+            self.data_label.set('%s  (%s bytes) - view and edit below'
+                                % (name, format(len(raw), ',')))
+            self._set_readonly_text(self.data_summary, ex.summary)
+            self.btn_data_import.configure(state='normal' if ex.import_kind else 'disabled')
+            self.btn_data_png.configure(state='normal' if ex.image else 'disabled')
+            self.data_note.set(ex.preview_note)
+            self.data_palette = list(ex.palette) if ex.palette else None
+            self.data_char_raw = ex.char_raw
+            if ex.palette_editable:
+                self.data_pal_bar.pack(fill='x', pady=(4, 0), before=self.data_split)
+                self._update_swatches()
+            else:
+                self.data_pal_bar.pack_forget()
+            self._draw_data_preview()
+            self.show_data_hex(0)
+            self.data_nb.select(0 if ex.kind == 'image' else 1)
+            self.nb.select(5)
+            self.info.set('%s  -  %s' % (name, 'picture' if ex.kind == 'image' else 'data file'))
+
+        def reload_data(self):
+            if self.cur_path and self.data:
+                self.load_path(self.cur_path)
+
+        def _update_swatches(self):
+            for i, b in enumerate(self.data_swatches):
+                if self.data_palette and i < len(self.data_palette):
+                    r, g, bl = self.data_palette[i][:3]
+                    lum = (r + g + bl) / 3
+                    col = '#%02X%02X%02X' % (r, g, bl)
+                    b.configure(background=col, activebackground=col,
+                                foreground='#000000' if lum > 128 else '#ffffff')
+                else:
+                    b.configure(background='#f0f0f0', activebackground='#f0f0f0',
+                                foreground='#000000')
+
+        def edit_palette_color(self, index):
+            if not self.data_palette or index >= len(self.data_palette):
+                return
+            col = self.data_palette[index]
+            rgb, _hex = colorchooser.askcolor(
+                color='#%02X%02X%02X' % tuple(col[:3]),
+                title='Palette colour %d' % index)
+            if not rgb:
+                return
+            self.data_palette[index] = tuple(int(v) for v in rgb)
+            self._update_swatches()
+            if self.data_char_raw:
+                self.data.image = extra_files.decode_char(self.data_char_raw, self.data_palette)
+            else:
+                self.data.image = extra_files.palette_strip(self.data_palette)
+            self._draw_data_preview()
+
+        def _draw_data_preview(self):
+            c = self.data_preview
+            c.delete('all')
+            im = self.data.image if self.data else None
+            w = max(1, c.winfo_width())
+            h = max(1, c.winfo_height())
+            if im is None:
+                if self.data:
+                    c.create_text(w // 2, h // 2, anchor='center', fill='#c8c8c8',
+                                  justify='center', font=('Segoe UI', 10),
+                                  text='No picture preview for this format.\n'
+                                       'Use the "Bytes (hex)" page and the patch box below.')
+                return
+            iw, ih = im.size
+            scale = max(1, min((w - 16) // iw, (h - 16) // ih))
+            scale = min(scale, 16)
+            self.data_photo = ImageTk.PhotoImage(
+                im.resize((iw * scale, ih * scale), Image.NEAREST))
+            c.create_image(w // 2, h // 2, image=self.data_photo, anchor='center')
+            c.create_text(6, 6, anchor='nw', text='%dx%d  (shown %dx)' % (iw, ih, scale),
+                          fill='#c8c8c8', font=('Segoe UI', 8))
+
+        def import_data_png(self):
+            if not self.cur_path or not self.data or not self.data.import_kind:
+                return
+            p = filedialog.askopenfilename(
+                title='PNG to import into %s' % os.path.basename(self.cur_path),
+                filetypes=[('PNG picture', '*.png'), ('All files', '*.*')])
+            if not p:
+                return
+            what = {'char': '32x32 graphic (and its 16-colour palette)',
+                    'plt': '16 palette colours',
+                    'ico': '64x64 portrait'}[self.data.import_kind]
+            if not messagebox.askyesno(
+                    'Import PNG', 'Replace the %s of\n%s\nwith the picture %s?\n\n'
+                    'A copy of the original files is kept in _backup.'
+                    % (what, os.path.basename(self.cur_path), os.path.basename(p))):
+                return
+            work = self.work_var.get().strip()
+            try:
+                backup_file(work, self.cur_path)
+                if self.data.import_kind == 'char' and self.data.companion:
+                    backup_file(work, self.data.companion)
+                res = extra_files.import_png(self.cur_path, p)
+            except Exception as e:
+                return messagebox.showerror('Import PNG', 'Could not import:\n%s' % e)
+            for path_, desc in res['written']:
+                self.log('imported %s -> %s (%s)' % (os.path.basename(p), path_, desc))
+            if res['note']:
+                self.log(res['note'])
+            self.log('Repack the ROM to test it.')
+            self.load_path(self.cur_path)
+
+        def save_data_png(self):
+            if not self.cur_path or not self.data or not self.data.image:
+                return
+            base = os.path.splitext(os.path.basename(self.cur_path))[0]
+            p = filedialog.asksaveasfilename(
+                title='Save picture as PNG', defaultextension='.png',
+                initialfile=base + '.png', filetypes=[('PNG picture', '*.png')])
+            if not p:
+                return
+            try:
+                self.data.image.save(p)
+            except Exception as e:
+                return messagebox.showerror('Save PNG', 'Could not save:\n%s' % e)
+            self.log('saved picture %s' % p)
+
+        def apply_data_palette(self):
+            if not self.cur_path or not self.data_palette:
+                return
+            work = self.work_var.get().strip()
+            try:
+                backup_file(work, self.cur_path)
+                extra_files.write_plt(self.cur_path, self.data_palette)
+            except Exception as e:
+                return messagebox.showerror('Palette', 'Could not save:\n%s' % e)
+            self.log('saved palette %s (%d colours)' % (self.cur_path, len(self.data_palette)))
+            self.log('Repack the ROM to test it.')
+            self.load_path(self.cur_path)
+
+        def _set_hex_text(self, text, offset):
+            self.data_hex.configure(state='normal')
+            self.data_hex.delete('1.0', 'end')
+            self.data_hex.insert('1.0', text)
+            self.data_hex.configure(state='disabled')
+            self.data_hex.yview_moveto(0)
+            self.data_hex_off = offset
+            self.data_hex_off_var.set('0x%X' % offset)
+            if self.data_raw:
+                end = min(len(self.data_raw), offset + extra_files.HEX_PAGE)
+                self.data_hex_range.set('0x%X - 0x%X of 0x%X'
+                                        % (offset, max(offset, end - 1), len(self.data_raw)))
+            else:
+                self.data_hex_range.set('')
+
+        def show_data_hex(self, offset):
+            if not self.data_raw:
+                self._set_hex_text('', 0)
+                return
+            offset = max(0, min(offset, len(self.data_raw) - 1))
+            offset -= offset % 16
+            self._set_hex_text('\n'.join(extra_files.hex_lines(self.data_raw, offset)), offset)
+
+        def goto_data_hex(self):
+            if not self.data_raw:
+                return
+            try:
+                off = extra_files.parse_offset(self.data_hex_off_var.get(), len(self.data_raw))
+            except Exception as e:
+                return messagebox.showerror('Hex view', str(e))
+            self.show_data_hex(off)
+
+        def page_data_hex(self, direction):
+            if not self.data_raw:
+                return
+            self.show_data_hex(self.data_hex_off + direction * extra_files.HEX_PAGE)
+
+        def apply_data_patch(self):
+            if not self.cur_path or not self.data:
+                return
+            try:
+                off = extra_files.parse_offset(self.data_patch_off.get(), len(self.data_raw))
+                blob = extra_files.parse_hex_bytes(self.data_patch_bytes.get())
+                if off + len(blob) > len(self.data_raw):
+                    raise extra_files.ExtraError(
+                        'the patch runs past the end of the file (size 0x%X)' % len(self.data_raw))
+            except Exception as e:
+                return messagebox.showerror('Byte patch', str(e))
+            if not messagebox.askyesno(
+                    'Byte patch', 'Write %d byte(s) at 0x%X of %s?\n\n'
+                    'A copy of the original is kept in _backup.'
+                    % (len(blob), off, os.path.basename(self.cur_path))):
+                return
+            work = self.work_var.get().strip()
+            try:
+                backup_file(work, self.cur_path)
+                extra_files.apply_patch(self.cur_path, off, blob)
+            except Exception as e:
+                return messagebox.showerror('Byte patch', 'Could not write:\n%s' % e)
+            self.log('patched %s: %d byte(s) at 0x%X'
+                     % (self.cur_path, len(blob), off))
+            self.log('Repack the ROM to test it.')
+            self.load_path(self.cur_path)
+            self.show_data_hex(off)
 
         # ------------------------------------------------------------ rooms view
         def fill_rooms(self):
@@ -2645,6 +3007,8 @@ if tk is not None:
             targets = [path]
             if L and L.tex_path and L.tex_path != path:
                 targets.append(L.tex_path)
+            if self.data and self.data.import_kind == 'char' and self.data.companion:
+                targets.append(self.data.companion)
             targets = [p for p in targets if p and os.path.exists(backup_path(work, p))]
             if not targets:
                 return
