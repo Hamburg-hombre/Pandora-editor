@@ -46,7 +46,7 @@ except ImportError:
 
 try:
     import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox, colorchooser
+    from tkinter import ttk, filedialog, messagebox, colorchooser, simpledialog
     import tkinter.font as tkfont
     from PIL import ImageTk
 except ImportError:          # headless use (tests); main() explains the problem
@@ -465,6 +465,12 @@ if tk is not None:
             self.data_char_raw = None
             self.data_swatches = []
             self.data_photo = None
+            self.chr_doc = None
+            self.chr_path = None
+            self.chr_refs = None
+            self.chr_index = None
+            self.chr_dirty = False
+            self.chr_loading = False
             self._build()
             self.after(100, self._poll)
 
@@ -612,6 +618,9 @@ if tk is not None:
                 '  .char/.plt/.ico show a preview; Import PNG replaces the picture.\n'
                 '  .crt/.nsbca/.nslbc/.tex show info + a hex view; the patch box\n'
                 '  writes bytes at a hexadecimal offset. .lvl opens in the Text tab.\n\n'
+                'Names (.CHR) tab\n'
+                '  CodeStrings.CHR is the name table Objects.LP points into. Pick a\n'
+                '  name, edit it and "Apply and save"; "Add name..." appends a new id.\n\n'
                 'Files\n'
                 '  Edits are written in place and a copy is kept in _backup.\n'
                 '  Repack the ROM after editing to test in-game.'))
@@ -619,7 +628,7 @@ if tk is not None:
         def _show_about(self):
             messagebox.showinfo('About Pandora editor', (
                 'Pandora editor for GoldenEye: Rogue Agent (Nintendo DS).\n\n'
-                'Model, texture, text, room, placement and extra-file editing, with a '
+                'Model, texture, text, room, placement, name and extra-file editing, with a '
                 'classic Windows layout inspired by Mario Kart Toolbox.\n\n'
                 'Keep this script next to nitro.py, scene.py, collision.py, '
                 'objects_lp.py, extra_files.py and the other tool modules.'))
@@ -1239,6 +1248,60 @@ if tk is not None:
             self.data_hex.pack(side='left', fill='both', expand=True)
             hsb.pack(side='right', fill='y')
 
+            # ---- names tab (CodeStrings.CHR)
+            ct = ttk.Frame(self.nb)
+            self.nb.add(ct, text='Names (.CHR)')
+            cbar = ttk.Frame(ct)
+            cbar.pack(fill='x')
+            self.chr_label = tk.StringVar(value=(
+                'Open a level\'s CodeStrings.CHR in the list on the left to see and edit its names.'))
+            ttk.Label(cbar, textvariable=self.chr_label).pack(side='left')
+            self.btn_chr_reload = ttk.Button(cbar, text='Reload', command=self.reload_chr)
+            self.btn_chr_reload.pack(side='right')
+            self.btn_chr_add = ttk.Button(cbar, text='Add name…', command=self.add_chr_name,
+                                          state='disabled')
+            self.btn_chr_add.pack(side='right', padx=4)
+
+            cef = ttk.LabelFrame(ct, text=' Selected name ', padding=6)
+            cef.pack(side='bottom', fill='x', pady=(6, 0))
+            ttk.Label(cef, text='Index').grid(row=0, column=0, sticky='e')
+            self.chr_index_var = tk.StringVar(value='—')
+            ttk.Label(cef, textvariable=self.chr_index_var, width=5).grid(
+                row=0, column=1, sticky='w', padx=(4, 12))
+            ttk.Label(cef, text='Name (latin-1)').grid(row=0, column=2, sticky='e')
+            self.chr_name_var = tk.StringVar()
+            self.chr_entry = ttk.Entry(cef, textvariable=self.chr_name_var)
+            self.chr_entry.grid(row=0, column=3, sticky='ew', padx=4)
+            self.btn_chr_save = ttk.Button(cef, text='Apply and save', command=self.save_chr_name,
+                                           state='disabled')
+            self.btn_chr_save.grid(row=0, column=4, padx=(8, 0))
+            ttk.Label(cef, style='Hint.TLabel', text=(
+                'CodeStrings.CHR is the name table that Objects.LP points into (its "id" column). '
+                'Changing a name keeps every id, so placements keep working and the table may grow '
+                'or shrink. Use "Add name…" to append; existing entries are never reordered or '
+                'deleted. A backup is kept in _backup.'), wraplength=760,
+                justify='left').grid(row=1, column=0, columnspan=5, sticky='w', pady=(4, 0))
+            cef.columnconfigure(3, weight=1)
+            self.chr_name_var.trace_add('write', self._on_chr_edit)
+
+            cf = ttk.Frame(ct)
+            cf.pack(fill='both', expand=True, pady=(4, 0))
+            cols = ('idx', 'offset', 'length', 'used', 'name')
+            heads = ('#', 'offset', 'bytes', 'used by', 'name')
+            widths = (52, 80, 60, 66, 470)
+            self.chr_tree = ttk.Treeview(cf, columns=cols, show='headings',
+                                         selectmode='browse', height=10)
+            for c, hd, wd in zip(cols, heads, widths):
+                self.chr_tree.heading(c, text=hd)
+                self.chr_tree.column(c, width=wd, stretch=(c == 'name'),
+                                     anchor='w' if c == 'name' else 'center')
+            csb = ttk.Scrollbar(cf, command=self.chr_tree.yview)
+            self.chr_tree.configure(yscrollcommand=csb.set)
+            self.chr_tree.pack(side='left', fill='both', expand=True)
+            csb.pack(side='right', fill='y')
+            self.chr_tree.bind('<<TreeviewSelect>>', self.on_chr_select)
+            self.chr_tree.bind('<Double-1>', lambda e: self.chr_entry.focus_set())
+
         def report_callback_exception(self, exc, val, tb):
             msg = ''.join(traceback.format_exception(exc, val, tb))
             try:
@@ -1369,6 +1432,9 @@ if tk is not None:
                 return
             if not self._confirm_discard_text():
                 return
+            if self.chr_dirty and not messagebox.askyesno(
+                    'Names', 'Discard the change you typed for name %s?' % self.chr_index):
+                return
             if self._room_dirty() and not messagebox.askyesno(
                     'Rooms', 'Discard the room box values you typed but did not save?'):
                 return
@@ -1394,6 +1460,7 @@ if tk is not None:
                 'collision' if low.endswith('.cvhm') else
                 'placement' if low.endswith('.lp') else
                 'rooms' if low.endswith('.roo') else
+                'names' if low.endswith('.chr') else
                 'image' if low.endswith(('.char', '.plt', '.ico')) else
                 'data' if low.endswith(('.crt', '.nsbca', '.nslbc', '.tex')) else
                 'model' if low.endswith(('.nsbmd', '.nsbtx')) else 'file')
@@ -1434,6 +1501,7 @@ if tk is not None:
             self.tex_info.set('')
             self._set_text('', False)
             self._clear_data()
+            self._clear_chr()
             self.btn_revert.configure(state='normal' if self._has_backup(path) else 'disabled')
             name = os.path.basename(path)
             if low.endswith(('.txt', '.lvl')):
@@ -1457,6 +1525,9 @@ if tk is not None:
                 return
             if extra_files.is_data_file(path):
                 self.load_data(path)
+                return
+            if low.endswith('.chr'):
+                self.load_chr(path)
                 return
             if low.endswith('.cvhm'):
                 try:
@@ -1819,6 +1890,201 @@ if tk is not None:
             self.log('Repack the ROM to test it.')
             self.load_path(self.cur_path)
             self.show_data_hex(off)
+
+        # ------------------------------------------------------- names view (.CHR)
+        def _clear_chr(self):
+            self.chr_doc = None
+            self.chr_path = None
+            self.chr_refs = None
+            self.chr_index = None
+            self.chr_dirty = False
+            self.chr_loading = True
+            self.chr_name_var.set('')
+            self.chr_loading = False
+            self.chr_index_var.set('—')
+            self.chr_label.set('Open a level\'s CodeStrings.CHR in the list on the left to see and '
+                               'edit its names.')
+            self.chr_tree.delete(*self.chr_tree.get_children())
+            self.btn_chr_add.configure(state='disabled')
+            self.btn_chr_save.configure(state='disabled')
+
+        def _chr_references(self, path):
+            """Count how many Objects.LP records point at each CHR index."""
+            lp_path = os.path.join(os.path.dirname(path), 'Objects.LP')
+            if not os.path.exists(lp_path):
+                return None
+            try:
+                lp = lpmod.parse(lp_path)
+                counts = {}
+                for rec in lp.records():
+                    counts[rec.h1] = counts.get(rec.h1, 0) + 1
+                return counts
+            except Exception:
+                return None
+
+        def load_chr(self, path, select=None):
+            name = os.path.basename(path)
+            try:
+                doc = lpmod.load_chr(path)
+            except Exception as e:
+                self.info.set('%s: could not parse CodeStrings.CHR (%s)' % (name, e))
+                return
+            self.chr_doc = doc
+            self.chr_path = path
+            self.chr_refs = self._chr_references(path)
+            self._fill_chr_table()
+            self.chr_label.set('%s  (%s bytes, %d names) - edit a name below'
+                               % (name, format(os.path.getsize(path), ','), doc.count))
+            self.chr_dirty = False
+            self.btn_chr_add.configure(state='normal')
+            self.btn_chr_save.configure(state='disabled')
+            self.info.set('%s  -  %d name(s), %d byte(s) of strings'
+                          % (name, doc.count, doc.string_size))
+            self.nb.select(6)
+            if doc.count:
+                idx = select if select is not None and 0 <= select < doc.count else 0
+                self.chr_tree.selection_set(str(idx))
+                self.chr_tree.see(str(idx))
+                self.on_chr_select()
+
+        def _fill_chr_table(self):
+            tree = self.chr_tree
+            tree.delete(*tree.get_children())
+            doc = self.chr_doc
+            if doc is None:
+                return
+            for i, s in enumerate(doc.strings):
+                off = doc.base + doc.offsets[i]
+                used = ('?' if self.chr_refs is None
+                        else str(self.chr_refs.get(i, 0)))
+                tree.insert('', 'end', iid=str(i), values=(
+                    i, '0x%X' % off, len(s.encode('latin-1')) + 1, used, s))
+
+        def _on_chr_edit(self, *_):
+            if self.chr_loading or self.chr_doc is None or self.chr_index is None:
+                return
+            self.chr_dirty = True
+            self.btn_chr_save.configure(state='normal')
+
+        def on_chr_select(self, _e=None):
+            sel = self.chr_tree.selection()
+            if not sel or self.chr_doc is None:
+                return
+            idx = int(sel[0])
+            if idx >= self.chr_doc.count:
+                return
+            if idx != self.chr_index and self.chr_dirty:
+                if not messagebox.askyesno(
+                        'Names', 'Discard the change you typed for name %s?' % self.chr_index):
+                    if self.chr_index is not None:
+                        self.chr_tree.selection_set(str(self.chr_index))
+                    return
+            if idx == self.chr_index and self.chr_dirty:
+                # The selection was just put back after a declined discard; keep the
+                # text the user typed instead of reloading the saved name.
+                return
+            self.chr_index = idx
+            self.chr_loading = True
+            self.chr_name_var.set(self.chr_doc.strings[idx])
+            self.chr_loading = False
+            self.chr_dirty = False
+            self.chr_index_var.set(str(idx))
+            self.btn_chr_save.configure(state='normal')
+
+        @staticmethod
+        def _check_chr_name(text):
+            if '\x00' in text:
+                raise ValueError('A name cannot contain a NUL character.')
+            try:
+                text.encode('latin-1')
+            except UnicodeEncodeError:
+                raise ValueError('This file stores latin-1 text only; remove the characters '
+                                 'that have no latin-1 equivalent.')
+
+        def _write_chr(self, data):
+            work = self.work_var.get().strip()
+            backup_file(work, self.chr_path)
+            with open(self.chr_path, 'wb') as f:
+                f.write(data)
+
+        def save_chr_name(self):
+            doc, idx = self.chr_doc, self.chr_index
+            if doc is None or idx is None:
+                return
+            text = self.chr_name_var.get()
+            try:
+                self._check_chr_name(text)
+            except ValueError as e:
+                return messagebox.showerror('Names', str(e))
+            old = doc.strings[idx]
+            if text == old:
+                self.chr_dirty = False
+                self.btn_chr_save.configure(state='disabled')
+                return self.log('name %d unchanged' % idx)
+            doc.strings[idx] = text
+            try:
+                data = doc.to_bytes()
+            except Exception as e:
+                doc.strings[idx] = old
+                return messagebox.showerror('Names', 'The name table is too large:\n%s' % e)
+            try:
+                self._write_chr(data)
+            except Exception as e:
+                doc.strings[idx] = old
+                return messagebox.showerror('Names', 'Could not save:\n%s' % e)
+            self.log('saved name %d: "%s" (%d -> %d bytes)'
+                     % (idx, text, len(old.encode('latin-1')) + 1,
+                        len(text.encode('latin-1')) + 1))
+            self.log('Repack the ROM to test it.')
+            self.load_chr(self.chr_path, select=idx)
+
+        def add_chr_name(self):
+            doc = self.chr_doc
+            if doc is None:
+                return
+            if self.chr_dirty and not messagebox.askyesno(
+                    'Add name', 'Discard the change you typed for name %s?' % self.chr_index):
+                return
+            name = simpledialog.askstring(
+                'Add name', 'Append a new name to CodeStrings.CHR:\n\n'
+                'The new entry gets the next id; existing ids do not change.', parent=self)
+            if name is None:
+                return
+            if not name:
+                return messagebox.showerror('Add name', 'Enter a name first.')
+            try:
+                self._check_chr_name(name)
+            except ValueError as e:
+                return messagebox.showerror('Add name', str(e))
+            old_strings = list(doc.strings)
+            old_offsets = list(doc.offsets)
+            old_size = doc.string_size
+            try:
+                new_index = doc.append([name])[0]
+                data = doc.to_bytes()
+            except Exception as e:
+                doc.strings = old_strings
+                doc.offsets = old_offsets
+                doc.string_size = old_size
+                return messagebox.showerror('Add name', 'The name table is too large:\n%s' % e)
+            try:
+                self._write_chr(data)
+            except Exception as e:
+                doc.strings = old_strings
+                doc.offsets = old_offsets
+                doc.string_size = old_size
+                return messagebox.showerror('Add name', 'Could not save:\n%s' % e)
+            self.log('added name %d: "%s"' % (new_index, name))
+            self.log('Repack the ROM to test it.')
+            self.load_chr(self.chr_path, select=new_index)
+
+        def reload_chr(self):
+            if not self.chr_path:
+                return
+            if self.chr_dirty and not messagebox.askyesno(
+                    'Reload', 'Discard the change you typed for name %s?' % self.chr_index):
+                return
+            self.load_chr(self.chr_path, select=self.chr_index)
 
         # ------------------------------------------------------------ rooms view
         def fill_rooms(self):

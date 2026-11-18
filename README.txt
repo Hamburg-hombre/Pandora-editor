@@ -11,9 +11,9 @@ Setup
 Workflow
   - Pick your .nds, click "Unpack ROM", browse the files on the left.
   - .nsbmd = models, .nsbtx = shared textures, .cvhm = collision, .roo = room boxes (now editable),
-    .lp = enemy/object placements and paths (now viewable and editable), .txt and .lvl = text
-    (now editable), .char/.plt/.ico = pictures and palettes, and .crt/.nsbca/.nslbc/.tex = the
-    Data tab (info + hex view/edit).
+    .lp = enemy/object placements and paths, .chr = the level name table (both now editable),
+    .txt and .lvl = text (now editable), .char/.plt/.ico = pictures and palettes, and
+    .crt/.nsbca/.nslbc/.tex = the Data tab (info + hex view/edit).
   - Edit, then "Repack ROM..." writes a new .nds. The first edit of any file keeps a copy in
     <work folder>/_backup ; "Revert file to original" restores it.
 
@@ -22,7 +22,7 @@ Window layout (classic Windows / Mario Kart Toolbox style)
     filter), Tools (view, OBJ and collision actions, room actions), Help (controls and about).
     Ctrl+O opens a ROM; Ctrl+S saves the open text file.
   - Left dock: the "Files" tree, its filter and "Export ALL models + collision...".
-  - Main document tabs: Model, Textures, Text, Rooms (.ROO), Placement (.LP), Data.
+  - Main document tabs: Model, Textures, Text, Rooms (.ROO), Placement (.LP), Data, Names (.CHR).
   - Model tab: a large black 3D viewport, a right-hand Properties / Collision / File dock, and
     Collision / Camera section tabs under the viewport.
   - Tables use the classic white grid with grey headings; the status line and Log dock are at the
@@ -200,3 +200,18 @@ Data tab (.char, .plt, .ico, .crt, .nsbca, .nslbc, .tex)
   - "Byte patch" writes bytes at an offset (both hexadecimal). Example: offset 200, bytes
     00 FF 7A. The first edit of a file keeps the original in _backup; "Revert file to original"
     restores it. Repack the ROM to test a change.
+
+Names (Names (.CHR) tab, CodeStrings.CHR)
+  Every level folder has a CodeStrings.CHR next to Objects.LP. It is the level's name table:
+  placements in Objects.LP store an id (h1) that indexes into it, so one name can be shared.
+  - Select a CodeStrings.CHR in the list on the left. The table lists every name with its id,
+    the byte offset where it starts, its stored length (including the terminating NUL) and how
+    many Objects.LP placements use it ("?" when that level has no readable Objects.LP).
+  - Pick a row, edit the name and click "Apply and save". Every id stays the same, so the
+    placements keep pointing at the right entry even when the text gets longer or shorter.
+  - "Add name..." appends a new name with the next free id. Use it when you need a new name for
+    the Placement tab. Existing entries are never reordered or deleted, because that would
+    change the ids stored in Objects.LP.
+  - Names are latin-1 text (letters, digits, punctuation and common accents); a NUL byte is not
+    allowed. A backup is kept in _backup and "Revert file to original" restores the table.
+    Repack the ROM to test a change.
