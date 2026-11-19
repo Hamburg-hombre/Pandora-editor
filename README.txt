@@ -11,7 +11,9 @@ Setup
 Workflow
   - Pick your .nds, click "Unpack ROM", browse the files on the left.
   - .nsbmd = models, .nsbtx = shared textures, .cvhm = collision, .roo = room boxes (now editable),
-    .lp = enemy/object placements and paths (now viewable and editable), .txt = text (now editable).
+    .lp = enemy/object placements and paths (now viewable and editable), .chr = the level name table
+    (now editable), .txt and .lvl = text (now editable), .char/.plt/.ico = pictures and palettes, and
+    .crt/.nsbca/.nslbc/.tex = the Data tab (info + hex view/edit).
   - Edit, then "Repack ROM..." writes a new .nds. The first edit of any file keeps a copy in
     <work folder>/_backup ; "Revert file to original" restores it.
 
@@ -154,7 +156,51 @@ If something looks wrong
   - Repacked ROM does not boot: keep a copy of the original .nds, and test one small change at a time.
 
 Text (Text tab)
-  - .txt files are now editable in the window. "Save text" writes the file back with the original
-    encoding and line endings (CRLF for this game), after keeping a backup copy.
+  - .txt and .lvl files are now editable in the window. "Save text" writes the file back with the
+    original encoding and line endings (CRLF for this game), after keeping a backup copy.
+  - .lvl is the level's Global.LVL: it stores resource lists in BEGIN "section" / END blocks. The
+    status line lists the sections it found, so you can see where you are while editing.
   - "Reload" throws the unsaved changes away. Ctrl+S also saves.
   - Only text characters the original file can store are allowed (ASCII for these files).
+
+Data tab (.char, .plt, .ico, .crt, .nsbca, .nslbc, .tex)
+  Select one of these files in the list on the left. The Data tab opens with a description on the
+  left, a picture preview or byte view on the right, and a byte patch box at the bottom.
+  - ".char" is a 32x32 picture with 16 colours (4 bits per pixel, 8x8 tile order). The colours
+    live in the matching ".plt" file. "Save PNG..." exports the preview; "Import PNG..." resizes
+    your picture to 32x32, reduces it to 16 colours and rewrites the .char plus its matching .plt
+    (index 0 stays transparent). Both originals go into _backup first.
+  - ".plt" holds the 16 colours. The preview uses the matching .char. Click one of the colour
+    chips, pick a new colour and click "Apply palette and save"; or "Import PNG..." to take the
+    16 main colours from a picture. Only the palette changes, not the pixels.
+  - ".ico" is a 64x64, 256-colour game-icon portrait (palette first, then the pixels). "Save PNG..."
+    exports it; "Import PNG..." rewrites both the palette and the pixels at 64x64.
+  - ".crt" is the object template table. The info panel lists the header, how many object and AI
+    templates exist, and their readable names (from Global.LVL when it is nearby).
+  - ".nsbca" is a NITRO skeletal animation. The info panel shows the animation name, frame count,
+    track count and every track's flags/target, so you can inspect it even though this tool does
+    not play animations.
+  - ".nslbc" is a level's script bytecode. The info panel shows the header words, the 16-byte hash
+    records and the readable strings (names and messages) inside the file.
+  - ".tex" is a texture/data bank whose layout is not decoded yet. The info panel shows its size
+    and byte statistics; use the hex view and patch box.
+  - The "Bytes (hex)" page shows 8 KB at a time. Type an offset (hex) and press Go, or use the
+    8 KB page buttons. The view is read-only.
+  - "Byte patch" writes bytes at an offset (both hexadecimal). Example: offset 200, bytes
+    00 FF 7A. The first edit of a file keeps the original in _backup; "Revert file to original"
+    restores it. Repack the ROM to test a change.
+
+Names (Names (.CHR) tab, CodeStrings.CHR)
+  Every level folder has a CodeStrings.CHR next to Objects.LP. It is the level's name table:
+  placements in Objects.LP store an id (h1) that indexes into it, so one name can be shared.
+  - Select a CodeStrings.CHR in the list on the left. The table lists every name with its id,
+    the byte offset where it starts, its stored length (including the terminating NUL) and how
+    many Objects.LP placements use it ("?" when that level has no readable Objects.LP).
+  - Pick a row, edit the name and click "Apply and save". Every id stays the same, so the
+    placements keep pointing at the right entry even when the text gets longer or shorter.
+  - "Add name..." appends a new name with the next free id. Use it when you need a new name for
+    the Placement tab. Existing entries are never reordered or deleted, because that would
+    change the ids stored in Objects.LP.
+  - Names are latin-1 text (letters, digits, punctuation and common accents); a NUL byte is not
+    allowed. A backup is kept in _backup and "Revert file to original" restores the table.
+    Repack the ROM to test a change.
