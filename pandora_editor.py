@@ -5,7 +5,7 @@ Run:  python pandora_editor.py
 Needs: Python 3.8+, Pillow and numpy (pip install pillow numpy). Tkinter ships with Python on
 Windows/macOS (Linux: sudo apt install python3-tk).
 Keep this file in the same folder as nitro.py, scene.py, nitro_write.py, nds_unpack.py,
-nds_repack.py, export_models.py, collision.py, objects_lp.py and extra_files.py.
+nds_repack.py, export_models.py and collision.py.
 """
 import os, sys, math, threading, queue, traceback, subprocess, platform
 
@@ -46,8 +46,7 @@ except ImportError:
 
 try:
     import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox, colorchooser, simpledialog
-    import tkinter.font as tkfont
+    from tkinter import ttk, filedialog, messagebox
     from PIL import ImageTk
 except ImportError:          # headless use (tests); main() explains the problem
     tk = None
@@ -56,7 +55,6 @@ try:
     from nitro import *          # noqa
     import nds_unpack, nds_repack, export_models, collision
     import objects_lp as lpmod
-    import extra_files
 except Exception as _e:
     _fatal('Could not load the tool files (%s: %s).\nKeep ALL the .py files from the zip in the same folder.'
            % (type(_e).__name__, _e))
@@ -426,9 +424,9 @@ if tk is not None:
     class App(tk.Tk):
         def __init__(self):
             super().__init__()
-            self.title('Pandora editor (GOLDENEYE: ROGUE AGENT DS)')
-            self.geometry('1280x820')
-            self.minsize(1000, 640)
+            self.title('GoldenEye: Rogue Agent DS - Pandora editor')
+            self.geometry('1150x780')
+            self.minsize(900, 600)
             self.q = queue.Queue()
             self.busy = False
             self.loaded = None
@@ -442,7 +440,7 @@ if tk is not None:
             self.lp_view_tris = []
             self.lp_vars = [tk.StringVar() for _ in range(6)]   # x,y,z, + angle/halfx/halfz/height
             self.lp_filter = tk.StringVar()
-            self.lp_kind = tk.StringVar(value='Everything')
+            self.lp_kind = tk.StringVar(value='all')
             self.lp_path_var = tk.StringVar()
             self.view_tris = []
             self.cur_path = None
@@ -458,333 +456,33 @@ if tk is not None:
             self.text_path = None
             self.text_info = None
             self.text_dirty = False
-            self.data = None
-            self.data_raw = b''
-            self.data_hex_off = 0
-            self.data_palette = None
-            self.data_char_raw = None
-            self.data_swatches = []
-            self.data_photo = None
-            self.chr_doc = None
-            self.chr_path = None
-            self.chr_refs = None
-            self.chr_index = None
-            self.chr_dirty = False
-            self.chr_loading = False
             self._build()
             self.after(100, self._poll)
 
-        # ------------------------------------------------------------- theme
-        def _apply_mktb_theme(self):
-            """Classic light-grey Windows chrome, white data grids and a black viewport."""
-            style = ttk.Style(self)
-            try:
-                style.theme_use('clam')
-            except tk.TclError:
-                pass
-            try:
-                for name in ('TkDefaultFont', 'TkTextFont', 'TkMenuFont',
-                             'TkHeadingFont', 'TkCaptionFont', 'TkTooltipFont'):
-                    tkfont.nametofont(name).configure(family='Segoe UI', size=9)
-            except Exception:
-                pass
-            bg, border = '#f0f0f0', '#a0a0a0'
-            style.configure('.', background=bg, foreground='#000000',
-                            font=('Segoe UI', 9), borderwidth=1)
-            style.configure('TFrame', background=bg)
-            style.configure('TLabel', background=bg, foreground='#000000')
-            style.configure('Hint.TLabel', background=bg, foreground='#5f5f5f')
-            style.configure('Status.TLabel', background=bg, foreground='#333333',
-                            font=('Segoe UI', 8))
-            style.configure('DockHeader.TLabel', background='#e4e4e4', foreground='#000000',
-                            font=('Segoe UI', 8, 'bold'), padding=(6, 2))
-            style.configure('TButton', background='#e1e1e1', foreground='#000000',
-                            padding=(8, 3), relief='raised', borderwidth=1,
-                            focusthickness=0)
-            style.map('TButton',
-                      background=[('disabled', '#f3f3f3'), ('pressed', '#c9e3f7'),
-                                  ('active', '#e8f4fc')],
-                      relief=[('pressed', 'sunken'), ('active', 'raised')])
-            style.configure('Tool.TButton', padding=(6, 2), font=('Segoe UI', 8))
-            style.configure('Small.TButton', padding=(2, 0), font=('Segoe UI', 8, 'bold'))
-            style.configure('TEntry', fieldbackground='#ffffff', foreground='#000000',
-                            padding=2, bordercolor=border, lightcolor='#ffffff',
-                            darkcolor='#a0a0a0')
-            style.configure('TCombobox', fieldbackground='#ffffff', padding=2)
-            style.configure('TCheckbutton', background=bg, foreground='#000000')
-            style.map('TCheckbutton', background=[('active', bg)])
-            style.configure('Sheet.TCheckbutton', background='#ffffff', foreground='#000000')
-            style.map('Sheet.TCheckbutton', background=[('active', '#ffffff')])
-            style.configure('TRadiobutton', background=bg)
-            style.configure('TNotebook', background=bg, borderwidth=0,
-                            tabmargins=(0, 2, 0, 0))
-            style.configure('TNotebook.Tab', background='#e4e4e4', foreground='#000000',
-                            padding=(14, 4), borderwidth=1, lightcolor='#ffffff',
-                            darkcolor='#a0a0a0')
-            style.map('TNotebook.Tab',
-                      background=[('selected', '#ffffff'), ('active', '#fafafa')],
-                      foreground=[('selected', '#000000')])
-            style.configure('Document.TNotebook', background=bg, borderwidth=0,
-                            tabmargins=(4, 3, 0, 0))
-            style.configure('Document.TNotebook.Tab', padding=(18, 5),
-                            font=('Segoe UI', 9))
-            style.configure('Dock.TNotebook', background='#ffffff', borderwidth=1,
-                            tabmargins=(0, 0, 0, 0))
-            style.configure('Dock.TNotebook.Tab', padding=(10, 3), font=('Segoe UI', 8))
-            style.configure('Section.TNotebook', background=bg, borderwidth=0,
-                            tabmargins=(0, 2, 0, 0))
-            style.configure('Section.TNotebook.Tab', padding=(11, 2), font=('Segoe UI', 8))
-            style.configure('Treeview', background='#ffffff', fieldbackground='#ffffff',
-                            foreground='#000000', rowheight=20, borderwidth=1,
-                            relief='solid', font=('Segoe UI', 9))
-            style.map('Treeview',
-                      background=[('selected', '#3399ff')],
-                      foreground=[('selected', '#ffffff')])
-            style.configure('Treeview.Heading', background='#e6e6e6', foreground='#000000',
-                            relief='raised', borderwidth=1, padding=(4, 3),
-                            font=('Segoe UI', 8, 'bold'))
-            style.map('Treeview.Heading', background=[('active', '#f2f2f2')])
-            style.configure('TLabelframe', background=bg, bordercolor=border,
-                            borderwidth=1, relief='groove')
-            style.configure('TLabelframe.Label', background=bg, foreground='#000000',
-                            font=('Segoe UI', 9, 'bold'))
-            style.configure('TPanedwindow', background=bg)
-            style.configure('TProgressbar', background='#4a9bd1', troughcolor='#dedede',
-                            borderwidth=1)
-            style.configure('TScrollbar', background='#e4e4e4', troughcolor='#f0f0f0',
-                            bordercolor=border, arrowcolor='#333333')
-            self.configure(background=bg)
-
-        # -------------------------------------------------------------- menu
-        def _build_menu(self):
-            mb = tk.Menu(self, tearoff=0, font=('Segoe UI', 9))
-            self.configure(menu=mb)
-
-            fm = tk.Menu(mb, tearoff=0, font=('Segoe UI', 9))
-            fm.add_command(label='Open ROM…', accelerator='Ctrl+O', command=self.pick_rom)
-            fm.add_command(label='Open work folder…', command=self.pick_work)
-            fm.add_separator()
-            fm.add_command(label='Unpack ROM…', command=self.do_unpack)
-            fm.add_command(label='Repack ROM…', command=self.do_repack)
-            fm.add_separator()
-            fm.add_command(label='Export all models + collision…', command=self.do_export_all)
-            fm.add_command(label='Revert selected file to original', command=self.do_revert)
-            fm.add_separator()
-            fm.add_command(label='Exit', command=self.destroy)
-            mb.add_cascade(label='File', menu=fm, underline=0)
-
-            em = tk.Menu(mb, tearoff=0, font=('Segoe UI', 9))
-            em.add_command(label='Save text', accelerator='Ctrl+S', command=self.save_text)
-            em.add_command(label='Reload text', command=self.reload_text)
-            em.add_separator()
-            em.add_command(label='Focus file filter',
-                           command=lambda: self.filter_entry.focus_set())
-            em.add_command(label='Clear file filter',
-                           command=lambda: self.filter_var.set(''))
-            mb.add_cascade(label='Edit', menu=em, underline=0)
-
-            tm = tk.Menu(mb, tearoff=0, font=('Segoe UI', 9))
-            tm.add_command(label='Reset model view', command=self.reset_view)
-            tm.add_command(label='Export current OBJ…', command=self.do_export_one)
-            tm.add_command(label='Replace model with any OBJ…', command=self.do_replace_obj)
-            tm.add_separator()
-            tm.add_command(label='Export collision OBJ…', command=self.do_export_collision)
-            tm.add_command(label='Generate collision from OBJ…',
-                           command=self.do_generate_collision)
-            tm.add_separator()
-            tm.add_command(label='Show all rooms', command=self.show_all_rooms)
-            tm.add_command(label='Zoom to selected room', command=self.zoom_room)
-            mb.add_cascade(label='Tools', menu=tm, underline=0)
-
-            hm = tk.Menu(mb, tearoff=0, font=('Segoe UI', 9))
-            hm.add_command(label='Controls / shortcuts…', command=self._show_controls)
-            hm.add_command(label='About Pandora editor…', command=self._show_about)
-            mb.add_cascade(label='Help', menu=hm, underline=0)
-
-            self.bind_all('<Control-o>', lambda e: self.pick_rom())
-            self.bind_all('<Control-s>', lambda e: (self.save_text(), 'break')[1])
-
-        def _show_controls(self):
-            messagebox.showinfo('Controls', (
-                'File list\n'
-                '  Click a file to open it. Filter box narrows the list.\n'
-                '  The document tabs change to show only the ones that apply.\n\n'
-                '3D viewport\n'
-                '  Left-drag = rotate, right-drag = pan, wheel = zoom.\n'
-                '  "Solid" toggles filled triangles; "Reset view" recentres.\n\n'
-                'Placement tab\n'
-                '  Click a row or a marker to select it; double-click to centre.\n'
-                '  + / − / duplicate / focus buttons sit above the table.\n\n'
-                'Data tab\n'
-                '  .char/.plt/.ico show a preview; Import PNG replaces the picture.\n'
-                '  .crt/.nsbca/.nslbc/.tex show info + a hex view; the patch box\n'
-                '  writes bytes at a hexadecimal offset. .lvl opens in the Text tab.\n\n'
-                'Names (.CHR) tab\n'
-                '  CodeStrings.CHR is the name table Objects.LP points into. Pick a\n'
-                '  name, edit it and "Apply and save"; "Add name..." appends a new id.\n\n'
-                'Files\n'
-                '  Edits are written in place and a copy is kept in _backup.\n'
-                '  Repack the ROM after editing to test in-game.'))
-
-        def _show_about(self):
-            messagebox.showinfo('About Pandora editor', (
-                'Pandora editor for GoldenEye: Rogue Agent (Nintendo DS).\n\n'
-                'Model, texture, text, room, placement, name and extra-file editing, with a '
-                'classic Windows layout inspired by Mario Kart Toolbox.\n\n'
-                'Keep this script next to nitro.py, scene.py, collision.py, '
-                'objects_lp.py, extra_files.py and the other tool modules.'))
-
-        def _dock_sheet(self, parent):
-            """White property sheet with dark MKTB-style group headers."""
-            sheet = tk.Frame(parent, background='#ffffff', highlightthickness=1,
-                             highlightbackground='#a0a0a0')
-            sheet.pack(fill='both', expand=True)
-
-            def group(title):
-                tk.Label(sheet, text='  ' + title, anchor='w', background='#0a246a',
-                         foreground='#ffffff', font=('Segoe UI', 9, 'bold'),
-                         padx=2, pady=2).pack(fill='x', pady=(0, 1))
-
-            def row(name, build=None, value=None):
-                r = tk.Frame(sheet, background='#ffffff')
-                r.pack(fill='x')
-                tk.Label(r, text=name, background='#ffffff', foreground='#000000',
-                         anchor='w', font=('Segoe UI', 9), padx=4).pack(side='left')
-                if build is not None:
-                    build(r)
-                elif value is not None:
-                    tk.Label(r, textvariable=value, background='#ffffff',
-                             foreground='#000000', anchor='e', font=('Segoe UI', 9),
-                             padx=4).pack(side='right')
-                return r
-
-            return sheet, group, row
-
-        def _build_model_dock(self, dock):
-            props = ttk.Frame(dock, padding=(2, 2))
-            dock.add(props, text='Properties')
-            _sheet, group, row = self._dock_sheet(props)
-            group('Object')
-            row('File', value=self.dock_file)
-            row('Type', value=self.dock_kind)
-            row('Solid', build=lambda r: ttk.Checkbutton(
-                r, variable=self.solid, style='Sheet.TCheckbutton',
-                command=self.redraw).pack(side='right', padx=(2, 4)))
-            group('Transformation')
-            row('Yaw', value=self.dock_yaw)
-            row('Pitch', value=self.dock_pitch)
-            row('Zoom', value=self.dock_zoom)
-            ttk.Button(_sheet, text='Reset view', style='Tool.TButton',
-                       command=self.reset_view).pack(fill='x', padx=4, pady=(4, 3))
-            group('Actions')
-            ttk.Button(_sheet, text='Export OBJ…', style='Tool.TButton',
-                       command=self.do_export_one).pack(fill='x', padx=4, pady=(2, 2))
-            ttk.Button(_sheet, text='Replace with any OBJ…', style='Tool.TButton',
-                       command=self.do_replace_obj).pack(fill='x', padx=4, pady=(0, 4))
-
-            col = ttk.Frame(dock, padding=(4, 4))
-            dock.add(col, text='Collision')
-            _cs, cgroup, crow = self._dock_sheet(col)
-            cgroup('Collision')
-            crow('File', value=self.dock_collision)
-            crow('Triangles', value=self.dock_collision_tris)
-            ttk.Button(col, text='Export collision OBJ…', style='Tool.TButton',
-                       command=self.do_export_collision).pack(fill='x', pady=(4, 2))
-            ttk.Button(col, text='Generate from OBJ…', style='Tool.TButton',
-                       command=self.do_generate_collision).pack(fill='x', pady=(0, 2))
-            ttk.Label(col, justify='left', style='Hint.TLabel', text=(
-                'Collision geometry lives in level space.\n'
-                'Generate builds a .CVHM from a collision OBJ.')).pack(anchor='w', pady=(4, 0))
-
-            filep = ttk.Frame(dock, padding=(4, 4))
-            dock.add(filep, text='File')
-            _fs, fgroup, _frow = self._dock_sheet(filep)
-            fgroup('Current file')
-            tk.Label(_fs, textvariable=self.info, background='#ffffff',
-                     foreground='#000000', anchor='w', justify='left', wraplength=215,
-                     font=('Segoe UI', 9), padx=4, pady=4).pack(fill='x')
-            fgroup('Original file')
-            self.btn_revert = ttk.Button(filep, text='Revert file to original',
-                                         style='Tool.TButton', command=self.do_revert,
-                                         state='disabled')
-            self.btn_revert.pack(fill='x', pady=(4, 2))
-            ttk.Label(filep, justify='left', style='Hint.TLabel', text=(
-                'Reverting restores the copy kept in the _backup folder.')).pack(
-                anchor='w', pady=(2, 0))
-
         # ------------------------------------------------------------ layout
         def _build(self):
-            self._apply_mktb_theme()
-            self._build_menu()
-            self.info = tk.StringVar(
-                value='Choose a ROM and click Unpack, or pick an already-unpacked folder.')
-            self.dock_file = tk.StringVar(value='no file selected')
-            self.dock_kind = tk.StringVar(value='—')
-            self.dock_yaw = tk.StringVar(value='0.60')
-            self.dock_pitch = tk.StringVar(value='0.35')
-            self.dock_zoom = tk.StringVar(value='1.00')
-            self.dock_collision = tk.StringVar(value='no collision loaded')
-            self.dock_collision_tris = tk.StringVar(value='0')
-
-            # ---- top tool strip: ROM / work folder
-            top = ttk.Frame(self, padding=(6, 4, 6, 3))
+            top = ttk.Frame(self, padding=6)
             top.pack(fill='x')
             self.rom_var, self.work_var = tk.StringVar(), tk.StringVar()
-            ttk.Label(top, text='ROM (.nds):').grid(row=0, column=0, sticky='e', padx=(0, 4))
-            ttk.Entry(top, textvariable=self.rom_var).grid(row=0, column=1, sticky='ew',
-                                                          padx=(0, 4))
-            ttk.Button(top, text='Browse…', style='Tool.TButton',
-                       command=self.pick_rom).grid(row=0, column=2, padx=(0, 3))
-            ttk.Button(top, text='Unpack ROM', style='Tool.TButton',
-                       command=self.do_unpack).grid(row=0, column=3)
-            ttk.Label(top, text='Work folder:').grid(row=1, column=0, sticky='e',
-                                                     padx=(0, 4), pady=(2, 0))
-            ttk.Entry(top, textvariable=self.work_var).grid(row=1, column=1, sticky='ew',
-                                                           padx=(0, 4), pady=(2, 0))
-            ttk.Button(top, text='Browse…', style='Tool.TButton',
-                       command=self.pick_work).grid(row=1, column=2, padx=(0, 3), pady=(2, 0))
-            ttk.Button(top, text='Repack ROM…', style='Tool.TButton',
-                       command=self.do_repack).grid(row=1, column=3, pady=(2, 0))
+            ttk.Label(top, text='ROM (.nds):').grid(row=0, column=0, sticky='e')
+            ttk.Entry(top, textvariable=self.rom_var).grid(row=0, column=1, sticky='ew', padx=4)
+            ttk.Button(top, text='Browse…', command=self.pick_rom).grid(row=0, column=2)
+            ttk.Button(top, text='Unpack ROM', command=self.do_unpack).grid(row=0, column=3, padx=(8, 0))
+            ttk.Label(top, text='Work folder:').grid(row=1, column=0, sticky='e')
+            ttk.Entry(top, textvariable=self.work_var).grid(row=1, column=1, sticky='ew', padx=4, pady=3)
+            ttk.Button(top, text='Browse…', command=self.pick_work).grid(row=1, column=2)
+            ttk.Button(top, text='Repack ROM…', command=self.do_repack).grid(row=1, column=3, padx=(8, 0))
             top.columnconfigure(1, weight=1)
-            ttk.Separator(self, orient='horizontal').pack(fill='x')
-
-            # ---- bottom: status line + log dock (packed before the body)
-            status = ttk.Frame(self, padding=(6, 2))
-            status.pack(side='bottom', fill='x')
-            ttk.Label(status, textvariable=self.info, style='Status.TLabel',
-                      anchor='w').pack(side='left', fill='x', expand=True)
-
-            lf = ttk.Frame(self)
-            lf.pack(side='bottom', fill='x')
-            self.progress = ttk.Progressbar(lf, mode='indeterminate')
-            self.progress.pack(fill='x')
-            logbar = ttk.Frame(lf)
-            logbar.pack(fill='x')
-            ttk.Label(logbar, text='Log', style='DockHeader.TLabel').pack(
-                side='left', fill='x', expand=True)
-            self.log_text = tk.Text(lf, height=4, state='disabled', wrap='word',
-                                    background='#ffffff', foreground='#000000',
-                                    relief='solid', borderwidth=1,
-                                    font=('Consolas', 9))
-            self.log_text.pack(fill='x')
 
             body = ttk.PanedWindow(self, orient='horizontal')
-            body.pack(fill='both', expand=True, padx=6, pady=(4, 4))
+            body.pack(fill='both', expand=True, padx=6)
 
-            # ---- left dock: file browser
-            left = ttk.Frame(body, width=250)
+            left = ttk.Frame(body)
             body.add(left, weight=1)
-            ttk.Label(left, text='Files', style='DockHeader.TLabel').pack(fill='x')
-            fbar = ttk.Frame(left)
-            fbar.pack(fill='x', pady=(3, 0))
             self.filter_var = tk.StringVar()
             self.filter_var.trace_add('write', lambda *a: self.fill_tree())
-            self.filter_entry = ttk.Entry(fbar, textvariable=self.filter_var)
-            self.filter_entry.pack(side='left', fill='x', expand=True)
-            ttk.Button(fbar, text='×', width=2, style='Small.TButton',
-                       command=lambda: self.filter_var.set('')).pack(side='left', padx=(2, 0))
-            ttk.Label(left, text='filter files (e.g. .nsbmd, barrel, .txt)',
-                      style='Hint.TLabel').pack(anchor='w', pady=(1, 3))
+            ttk.Entry(left, textvariable=self.filter_var).pack(fill='x')
+            ttk.Label(left, text='filter files (e.g. .nsbmd, barrel, .txt)', foreground='gray').pack(anchor='w')
             tf = ttk.Frame(left)
             tf.pack(fill='both', expand=True)
             self.tree = ttk.Treeview(tf, show='tree', selectmode='browse')
@@ -793,35 +491,38 @@ if tk is not None:
             self.tree.pack(side='left', fill='both', expand=True)
             sb.pack(side='right', fill='y')
             self.tree.bind('<<TreeviewSelect>>', self.on_select)
-            ttk.Button(left, text='Export ALL models + collision…', style='Tool.TButton',
-                       command=self.do_export_all).pack(fill='x', pady=(4, 0))
+            ttk.Button(left, text='Export ALL models + collision (OBJ + PNG)…', command=self.do_export_all).pack(fill='x', pady=(4, 0))
 
-            # ---- right: document tabs
             right = ttk.Frame(body)
-            body.add(right, weight=4)
-            self.nb = ttk.Notebook(right, style='Document.TNotebook')
+            body.add(right, weight=3)
+            ir = ttk.Frame(right)
+            ir.pack(fill='x', pady=(0, 4))
+            self.info = tk.StringVar(value='Choose a ROM and click Unpack, or pick an already-unpacked folder.')
+            ttk.Label(ir, textvariable=self.info, wraplength=640, justify='left').pack(side='left', anchor='w')
+            self.btn_revert = ttk.Button(ir, text='Revert file to original', command=self.do_revert, state='disabled')
+            self.btn_revert.pack(side='right')
+            self.nb = ttk.Notebook(right)
             self.nb.pack(fill='both', expand=True)
 
-            # ---- model tab (viewport + property dock + bottom section tabs)
+            # ---- model tab
             mt = ttk.Frame(self.nb)
             self.nb.add(mt, text='Model')
-            mp = ttk.PanedWindow(mt, orient='horizontal')
-            mp.pack(fill='both', expand=True)
-
-            vpf = ttk.Frame(mp)
-            mp.add(vpf, weight=4)
-            vbar = ttk.Frame(vpf)
-            vbar.pack(fill='x', pady=(2, 2))
+            bar = ttk.Frame(mt)
+            bar.pack(fill='x')
             self.solid = tk.BooleanVar(value=True)
-            ttk.Checkbutton(vbar, text='Solid', variable=self.solid,
-                            command=self.redraw).pack(side='left')
-            ttk.Button(vbar, text='Reset view', style='Tool.TButton',
-                       command=self.reset_view).pack(side='left', padx=6)
-            ttk.Label(vbar, text='drag = rotate   right-drag = pan   wheel = zoom',
-                      style='Hint.TLabel').pack(side='right')
-
-            self.canvas = tk.Canvas(vpf, background='#000000', highlightthickness=1,
-                                    highlightbackground='#7a7a7a', borderwidth=0)
+            ttk.Checkbutton(bar, text='Solid', variable=self.solid, command=self.redraw).pack(side='left')
+            ttk.Button(bar, text='Reset view', command=self.reset_view).pack(side='left', padx=6)
+            ttk.Button(bar, text='Replace with any OBJ…', command=self.do_replace_obj).pack(side='right')
+            ttk.Button(bar, text='Export OBJ…', command=self.do_export_one).pack(side='right')
+            ttk.Label(bar, text='drag = rotate, right-drag = pan, wheel = zoom', foreground='gray').pack(side='left', padx=8)
+            cb = ttk.Frame(mt)
+            cb.pack(fill='x', pady=(3, 0))
+            ttk.Button(cb, text='Export collision OBJ…', command=self.do_export_collision).pack(side='left')
+            ttk.Button(cb, text='Generate collision from OBJ…',
+                       command=self.do_generate_collision).pack(side='left', padx=4)
+            ttk.Label(cb, text='(.CVHM files - collision geometry lives in level space)',
+                      foreground='gray').pack(side='left', padx=8)
+            self.canvas = tk.Canvas(mt, background='#202428', highlightthickness=0)
             self.canvas.pack(fill='both', expand=True)
             self.canvas.bind('<ButtonPress-1>', self.on_press)
             self.canvas.bind('<B1-Motion>', self.on_drag)
@@ -834,39 +535,12 @@ if tk is not None:
             self.canvas.bind('<Button-5>', lambda e: self.zoom_by(1 / 1.1))
             self.canvas.bind('<Configure>', lambda e: self.redraw())
 
-            # MKTB-style bottom section strip under the viewport
-            vd = ttk.Notebook(vpf, style='Section.TNotebook')
-            vd.pack(fill='x', pady=(2, 0))
-            colpage = ttk.Frame(vd, padding=(4, 3))
-            vd.add(colpage, text='Collision')
-            ttk.Button(colpage, text='Export collision OBJ…', style='Tool.TButton',
-                       command=self.do_export_collision).pack(side='left')
-            ttk.Button(colpage, text='Generate from OBJ…', style='Tool.TButton',
-                       command=self.do_generate_collision).pack(side='left', padx=4)
-            ttk.Label(colpage, text='.CVHM files - collision geometry lives in level space',
-                      style='Hint.TLabel').pack(side='left', padx=8)
-            campage = ttk.Frame(vd, padding=(4, 3))
-            vd.add(campage, text='Camera')
-            ttk.Button(campage, text='Reset view', style='Tool.TButton',
-                       command=self.reset_view).pack(side='left')
-            ttk.Label(campage, text='1 pixel = 0.01 rad, wheel zooms around the view centre',
-                      style='Hint.TLabel').pack(side='left', padx=8)
-
-            dock = ttk.Notebook(mp, style='Dock.TNotebook')
-            mp.add(dock, weight=1)
-            dock.configure(width=250)
-            self.model_dock = dock
-            self._build_model_dock(dock)
-
             # ---- texture tab
             tt = ttk.Frame(self.nb)
             self.nb.add(tt, text='Textures')
             tl = ttk.Frame(tt)
             tl.pack(side='left', fill='y')
-            self.texlist = tk.Listbox(tl, width=34, exportselection=False,
-                                      background='#ffffff', foreground='#000000',
-                                      selectbackground='#3399ff', selectforeground='#ffffff',
-                                      relief='solid', borderwidth=1, font=('Segoe UI', 9))
+            self.texlist = tk.Listbox(tl, width=38, exportselection=False)
             self.texlist.pack(side='left', fill='y')
             tsb = ttk.Scrollbar(tl, command=self.texlist.yview)
             self.texlist.configure(yscrollcommand=tsb.set)
@@ -886,8 +560,7 @@ if tk is not None:
             ttk.Button(pr, text='Save PNG…', command=self.save_texture).pack(side='right')
             self.tex_info = tk.StringVar()
             ttk.Label(tr, textvariable=self.tex_info, wraplength=520, justify='left').pack(anchor='w', pady=2)
-            self.tex_canvas = tk.Canvas(tr, background='#303030', highlightthickness=1,
-                                        highlightbackground='#7a7a7a')
+            self.tex_canvas = tk.Canvas(tr, background='#303030', highlightthickness=0)
             self.tex_canvas.pack(fill='both', expand=True)
 
             # ---- text tab
@@ -902,9 +575,7 @@ if tk is not None:
             ttk.Button(xtb, text='Reload', command=self.reload_text).pack(side='right', padx=4)
             txtf = ttk.Frame(xt)
             txtf.pack(fill='both', expand=True)
-            self.text = tk.Text(txtf, wrap='word', font=('Consolas', 10), undo=True,
-                                background='#ffffff', foreground='#000000',
-                                insertbackground='#000000', relief='solid', borderwidth=1)
+            self.text = tk.Text(txtf, wrap='word', font=('Courier', 11), undo=True)
             xsb = ttk.Scrollbar(txtf, command=self.text.yview)
             self.text.configure(yscrollcommand=xsb.set)
             self.text.pack(side='left', fill='both', expand=True)
@@ -921,35 +592,28 @@ if tk is not None:
             ttk.Button(rbar, text='Zoom to room', command=self.zoom_room).pack(side='left', padx=4)
             self.rooms_hint = tk.StringVar(
                 value='Open a level\'s Global.ROO in the list on the left to see and edit its room boxes.')
-            ttk.Label(rt, textvariable=self.rooms_hint, style='Hint.TLabel', wraplength=780,
+            ttk.Label(rt, textvariable=self.rooms_hint, foreground='#606060', wraplength=780,
                       justify='left').pack(anchor='w', pady=(4, 4))
-            # Pack the selected-box editor first (bottom) so it keeps its space
-            # when the window is short; the 3D view and table shrink instead.
-            self.room_entries = []
-            ef = ttk.LabelFrame(rt, text=' Selected room box (level units, stored with 1/4096 precision) ',
-                                padding=6)
-            ef.pack(side='bottom', fill='x', pady=(6, 0))
-            for k, ax in enumerate(('X', 'Y', 'Z')):
-                ttk.Label(ef, text=ax).grid(row=0, column=k + 1)
-            ttk.Label(ef, text='Min').grid(row=1, column=0, sticky='e', padx=(0, 6))
-            ttk.Label(ef, text='Max').grid(row=2, column=0, sticky='e', padx=(0, 6))
-            for i in range(6):
-                ent = ttk.Entry(ef, textvariable=self.room_vars[i], width=13)
-                ent.grid(row=1 + i // 3, column=1 + i % 3, padx=3, pady=2, sticky='w')
-                self.room_entries.append(ent)
-            ttk.Button(ef, text='Apply box and save', command=self.apply_room_box).grid(
-                row=1, column=4, rowspan=2, padx=(10, 0))
-            ttk.Label(ef, style='Hint.TLabel', text=(
-                'The game only runs collision inside the room the player is in, so a box must contain the '
-                'walkable area. "Apply" writes the file (a backup is kept); Repack the ROM to test it.'),
-                wraplength=780, justify='left').grid(row=3, column=0, columnspan=5, sticky='w', pady=(4, 0))
-
             rf = ttk.PanedWindow(rt, orient='vertical')
             rf.pack(fill='both', expand=True)
+            tablef = ttk.Frame(rf)
+            rf.add(tablef, weight=3)
+            cols = ('idx', 'name', 'flags', 'x0', 'y0', 'z0', 'x1', 'y1', 'z1', 'size')
+            heads = ('#', 'room', 'flags', 'min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z', 'size (X x Y x Z)')
+            widths = (34, 130, 52, 66, 66, 66, 66, 66, 66, 150)
+            self.room_tree = ttk.Treeview(tablef, columns=cols, show='headings', selectmode='browse', height=8)
+            for c, hd, wd in zip(cols, heads, widths):
+                self.room_tree.heading(c, text=hd)
+                self.room_tree.column(c, width=wd, stretch=False, anchor='w' if c == 'name' else 'center')
+            rsb = ttk.Scrollbar(tablef, command=self.room_tree.yview)
+            self.room_tree.configure(yscrollcommand=rsb.set)
+            self.room_tree.pack(side='left', fill='both', expand=True)
+            rsb.pack(side='right', fill='y')
+            self.room_tree.bind('<<TreeviewSelect>>', self.on_room_select)
+            self.room_entries = []
             viewf = ttk.Frame(rf)
-            rf.add(viewf, weight=3)
-            self.room_canvas = tk.Canvas(viewf, background='#000000', highlightthickness=1,
-                                         highlightbackground='#7a7a7a', height=210)
+            rf.add(viewf, weight=2)
+            self.room_canvas = tk.Canvas(viewf, background='#202428', highlightthickness=0, height=230)
             self.room_canvas.pack(fill='both', expand=True)
             self.room_canvas.bind('<ButtonPress-1>', self.on_press)
             self.room_canvas.bind('<B1-Motion>', self.on_drag)
@@ -961,21 +625,24 @@ if tk is not None:
             self.room_canvas.bind('<Button-4>', lambda e: self.zoom_by(1.1))
             self.room_canvas.bind('<Button-5>', lambda e: self.zoom_by(1 / 1.1))
             self.room_canvas.bind('<Configure>', lambda e: self.redraw())
-            tablef = ttk.Frame(rf)
-            rf.add(tablef, weight=2)
-            cols = ('idx', 'name', 'flags', 'x0', 'y0', 'z0', 'x1', 'y1', 'z1', 'size')
-            heads = ('#', 'room', 'flags', 'min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z', 'size (X x Y x Z)')
-            widths = (34, 130, 52, 66, 66, 66, 66, 66, 66, 150)
-            self.room_tree = ttk.Treeview(tablef, columns=cols, show='headings', selectmode='browse', height=6)
-            for c, hd, wd in zip(cols, heads, widths):
-                self.room_tree.heading(c, text=hd)
-                self.room_tree.column(c, width=wd, stretch=False, anchor='w' if c == 'name' else 'center')
-            rsb = ttk.Scrollbar(tablef, command=self.room_tree.yview)
-            self.room_tree.configure(yscrollcommand=rsb.set)
-            self.room_tree.pack(side='left', fill='both', expand=True)
-            rsb.pack(side='right', fill='y')
-            self.room_tree.bind('<<TreeviewSelect>>', self.on_room_select)
+            ef = ttk.LabelFrame(rt, text=' Selected room box (level units, stored with 1/4096 precision) ',
+                                padding=6)
+            ef.pack(fill='x', pady=(6, 0))
+            for k, ax in enumerate(('X', 'Y', 'Z')):
+                ttk.Label(ef, text=ax).grid(row=0, column=k + 1)
+            ttk.Label(ef, text='Min').grid(row=1, column=0, sticky='e', padx=(0, 6))
+            ttk.Label(ef, text='Max').grid(row=2, column=0, sticky='e', padx=(0, 6))
+            for i in range(6):
+                ent = ttk.Entry(ef, textvariable=self.room_vars[i], width=13)
+                ent.grid(row=1 + i // 3, column=1 + i % 3, padx=3, pady=2, sticky='w')
+                self.room_entries.append(ent)
             self.room_tree.bind('<Double-1>', lambda e: self.room_entries[0].focus_set())
+            ttk.Button(ef, text='Apply box and save', command=self.apply_room_box).grid(
+                row=1, column=4, rowspan=2, padx=(10, 0))
+            ttk.Label(ef, foreground='#606060', text=(
+                'The game only runs collision inside the room the player is in, so a box must contain the '
+                'walkable area. "Apply" writes the file (a backup is kept); Repack the ROM to test it.'),
+                wraplength=780, justify='left').grid(row=3, column=0, columnspan=5, sticky='w', pady=(4, 0))
 
             # ---- placement tab (Objects.LP)
             pt = ttk.Frame(self.nb)
@@ -998,16 +665,9 @@ if tk is not None:
                 'weapons, waypoints, trigger boxes (flags 0/2), the patrol path graph (flags 5) and the '
                 'enemy spawn points with their facing (flags 8). Positions are 12.12 fixed point in the '
                 'same space as the collision and models.'))
-            ttk.Label(pt, textvariable=self.lp_hint, style='Hint.TLabel', wraplength=780,
+            ttk.Label(pt, textvariable=self.lp_hint, foreground='#606060', wraplength=780,
                       justify='left').pack(anchor='w', pady=(4, 4))
-            # The section tabs (table + editor) are packed first, from the bottom,
-            # so the table and edited values stay reachable when the window is
-            # short; the 3D view above shrinks instead.
-            inner = ttk.Notebook(pt, style='Section.TNotebook')
-            inner.pack(side='bottom', fill='x', pady=(3, 0))
-            self.lp_inner = inner
-            self.lp_canvas = tk.Canvas(pt, background='#000000', highlightthickness=1,
-                                       highlightbackground='#7a7a7a', height=220)
+            self.lp_canvas = tk.Canvas(pt, background='#202428', highlightthickness=0, height=250)
             self.lp_canvas.pack(fill='both', expand=True)
             self.lp_canvas.bind('<ButtonPress-1>', self.on_press)
             self.lp_canvas.bind('<B1-Motion>', self.on_drag)
@@ -1019,78 +679,89 @@ if tk is not None:
             self.lp_canvas.bind('<Button-4>', lambda e: self.zoom_by(1.1))
             self.lp_canvas.bind('<Button-5>', lambda e: self.zoom_by(1 / 1.1))
             self.lp_canvas.bind('<Configure>', lambda e: self.redraw())
+            inner = ttk.Notebook(pt)
+            inner.pack(fill='both', expand=True, pady=(4, 0))
+            self.lp_inner = inner
 
             # ---- placements page
             pp = ttk.Frame(inner)
             inner.add(pp, text='Placements')
-            # Editor first (bottom) so it keeps its space on short windows.
-            ppan = ttk.LabelFrame(pp, text=' Selected placement ', padding=6)
-            ppan.pack(side='bottom', fill='x', pady=(6, 0))
-            for k, ax in enumerate(('X', 'Y', 'Z')):
-                ttk.Label(ppan, text=ax).grid(row=0, column=k + 1)
-            ttk.Label(ppan, text='Position').grid(row=1, column=0, sticky='e', padx=(0, 6))
-            for i in range(3):
-                ent = ttk.Entry(ppan, textvariable=self.lp_vars[i], width=10)
-                ent.grid(row=1, column=1 + i, padx=3, pady=2, sticky='w')
-            ttk.Label(ppan, text='Facing').grid(row=2, column=0, sticky='e', padx=(0, 6))
-            self.lp_angle_ent = ttk.Entry(ppan, textvariable=self.lp_vars[3], width=10)
-            self.lp_angle_ent.grid(row=2, column=1, padx=3, pady=2, sticky='w')
-            ttk.Label(ppan, text='brads').grid(row=2, column=2, columnspan=2,
-                                               sticky='w', padx=3)
-            ttk.Label(ppan, text='Box').grid(row=2, column=3, sticky='e')
-            self.lp_box_vars = [tk.StringVar() for _ in range(3)]     # half X, half Z, height
-            for i in range(3):
-                ttk.Entry(ppan, textvariable=self.lp_box_vars[i], width=7).grid(
-                    row=2, column=4 + i, padx=3, pady=2, sticky='w')
-            ttk.Label(ppan, text='size').grid(row=2, column=7, sticky='w')
-            ttk.Button(ppan, text='Apply and save', command=self.lp_apply_save).grid(
-                row=1, column=8, rowspan=2, padx=(10, 0))
-            ttk.Label(ppan, style='Hint.TLabel', text=(
-                'Coordinates are the level\'s world space. "Apply and save" rewrites the file (a backup is '
-                'kept); repack the ROM to test it. Facing uses brads (4096 = 360°); the box stores '
-                'half X, half Z and height.'), wraplength=740, justify='left').grid(
-                row=3, column=0, columnspan=10, sticky='w', pady=(4, 0))
-
             pf = ttk.PanedWindow(pp, orient='vertical')
             pf.pack(fill='both', expand=True)
             tablef = ttk.Frame(pf)
             pf.add(tablef, weight=3)
-            ptool = ttk.Frame(tablef)
-            ptool.pack(fill='x')
-            ttk.Button(ptool, text='+', width=3, style='Small.TButton',
-                       command=self.lp_add_placement).pack(side='left')
-            ttk.Button(ptool, text='−', width=3, style='Small.TButton',
-                       command=self.lp_delete_placement).pack(side='left', padx=2)
-            ttk.Button(ptool, text='⧉', width=3, style='Small.TButton',
-                       command=self.lp_duplicate_placement).pack(side='left')
-            ttk.Button(ptool, text='◎', width=3, style='Small.TButton',
-                       command=self.lp_focus_sel).pack(side='left', padx=2)
-            ttk.Label(ptool, text='add / delete / duplicate / focus',
-                      style='Hint.TLabel').pack(side='left', padx=6)
-            ptreef = ttk.Frame(tablef)
-            ptreef.pack(fill='both', expand=True)
             cols = ('idx', 'h1', 'name', 'template', 'x', 'y', 'z')
             heads = ('#', 'id', 'name (CodeStrings.CHR)', 'template', 'X', 'Y', 'Z')
             widths = (34, 44, 150, 200, 70, 70, 70)
-            self.lp_place_tree = ttk.Treeview(ptreef, columns=cols, show='headings',
-                                               selectmode='browse', height=6)
+            self.lp_place_tree = ttk.Treeview(tablef, columns=cols, show='headings', selectmode='browse',
+                                               height=8)
             for c, hd, wd in zip(cols, heads, widths):
                 self.lp_place_tree.heading(c, text=hd)
                 self.lp_place_tree.column(c, width=wd, stretch=(c == 'template'),
                                           anchor='w' if c in ('name', 'template') else 'center')
-            tsb = ttk.Scrollbar(ptreef, command=self.lp_place_tree.yview)
+            tsb = ttk.Scrollbar(tablef, command=self.lp_place_tree.yview)
             self.lp_place_tree.configure(yscrollcommand=tsb.set)
             self.lp_place_tree.pack(side='left', fill='both', expand=True)
             tsb.pack(side='right', fill='y')
             self.lp_place_tree.bind('<<TreeviewSelect>>', self.on_lp_place_select)
             self.lp_place_tree.bind('<Double-1>', lambda e: self.lp_focus_sel())
+            ppan = ttk.LabelFrame(pp, text=' Selected placement ', padding=6)
+            ppan.pack(fill='x', pady=(6, 0))
+            for k, ax in enumerate(('X', 'Y', 'Z')):
+                ttk.Label(ppan, text=ax).grid(row=0, column=k + 1)
+            ttk.Label(ppan, text='Position').grid(row=1, column=0, sticky='e', padx=(0, 6))
+            for i in range(3):
+                ent = ttk.Entry(ppan, textvariable=self.lp_vars[i], width=11)
+                ent.grid(row=1, column=1 + i, padx=3, pady=2, sticky='w')
+            ttk.Label(ppan, text='Facing').grid(row=2, column=0, sticky='e', padx=(0, 6))
+            self.lp_angle_ent = ttk.Entry(ppan, textvariable=self.lp_vars[3], width=11)
+            self.lp_angle_ent.grid(row=2, column=1, padx=3, pady=2, sticky='w')
+            ttk.Label(ppan, text='brads (4096 = 360°)').grid(row=2, column=2, columnspan=2,
+                                                            sticky='w', padx=3)
+            ttk.Label(ppan, text='Box').grid(row=2, column=3, sticky='e')
+            self.lp_box_vars = [tk.StringVar() for _ in range(3)]     # half X, half Z, height
+            for i in range(3):
+                ttk.Entry(ppan, textvariable=self.lp_box_vars[i], width=8).grid(
+                    row=2, column=4 + i, padx=3, pady=2, sticky='w')
+            ttk.Label(ppan, text='half X / half Z / height').grid(row=2, column=7, sticky='w')
+            ttk.Button(ppan, text='Apply and save', command=self.lp_apply_save).grid(
+                row=1, column=8, rowspan=2, padx=(10, 0))
+            qb = ttk.Frame(ppan)
+            qb.grid(row=3, column=0, columnspan=10, sticky='w', pady=(6, 0))
+            ttk.Button(qb, text='Add placement…', command=self.lp_add_placement).pack(side='left')
+            ttk.Button(qb, text='Duplicate placement…', command=self.lp_duplicate_placement).pack(
+                side='left', padx=6)
+            ttk.Button(qb, text='Delete placement', command=self.lp_delete_placement).pack(side='left')
+            ttk.Label(ppan, foreground='#606060', text=(
+                'Coordinates are the level\'s world space. "Apply and save" rewrites the file (a backup is '
+                'kept); repack the ROM to test it. Enemies store a facing; trigger boxes store a '
+                'centred box.')).grid(row=4, column=0, columnspan=10, sticky='w', pady=(4, 0))
 
             # ---- paths page
             qp = ttk.Frame(inner)
             inner.add(qp, text='Paths')
-            # Editor first (bottom) so it keeps its space on short windows.
+            qf = ttk.PanedWindow(qp, orient='vertical')
+            qf.pack(fill='both', expand=True)
+            qtablef = ttk.Frame(qf)
+            qf.add(qtablef, weight=3)
+            qcols = ('node', 'x', 'y', 'z', 'deg')
+            qheads = ('node', 'X', 'Y', 'Z', 'links')
+            qwidths = (60, 90, 90, 90, 60)
+            self.lp_path_tree = ttk.Treeview(qtablef, columns=qcols, show='tree headings',
+                                             selectmode='browse', height=9)
+            self.lp_path_tree.heading('#0', text='path')
+            self.lp_path_tree.column('#0', width=170, stretch=True, anchor='w')
+            for c, hd, wd in zip(qcols, qheads, qwidths):
+                self.lp_path_tree.heading(c, text=hd)
+                self.lp_path_tree.column(c, width=wd, stretch=False, anchor='center')
+            qsb = ttk.Scrollbar(qtablef, command=self.lp_path_tree.yview)
+            self.lp_path_tree.configure(yscrollcommand=qsb.set)
+            self.lp_path_tree.pack(side='left', fill='both', expand=True)
+            qsb.pack(side='right', fill='y')
+            self.lp_path_tree.bind('<<TreeviewSelect>>', self.on_lp_path_select)
+            self.lp_path_tree.bind('<Double-1>', lambda e: self.lp_focus_sel())
             qpan = ttk.LabelFrame(qp, text=' Selected path node ', padding=6)
-            qpan.pack(side='bottom', fill='x', pady=(6, 0))
+            qpan.pack(fill='x', pady=(6, 0))
             for k, ax in enumerate(('X', 'Y', 'Z')):
                 ttk.Label(qpan, text=ax).grid(row=0, column=k + 1)
             self.lp_pvars = [tk.StringVar() for _ in range(3)]
@@ -1099,263 +770,27 @@ if tk is not None:
                     row=1, column=1 + i, padx=3, pady=2, sticky='w')
             ttk.Button(qpan, text='Apply and save', command=self.lp_path_apply_save).grid(
                 row=1, column=4, padx=(10, 0))
-            ttk.Label(qpan, style='Hint.TLabel', text=(
-                'Edges are stored in both directions and their lengths are rewritten when you apply. '
-                'The AI uses these graphs to walk patrol routes.'), wraplength=740,
-                justify='left').grid(
-                row=2, column=0, columnspan=5, sticky='w', pady=(4, 0))
+            qb2 = ttk.Frame(qpan)
+            qb2.grid(row=2, column=0, columnspan=5, sticky='w', pady=(6, 0))
+            ttk.Button(qb2, text='Add node', command=self.lp_path_add_node).pack(side='left')
+            ttk.Button(qb2, text='Remove node', command=self.lp_path_del_node).pack(side='left', padx=4)
+            ttk.Button(qb2, text='Add path', command=self.lp_path_add_path).pack(side='left', padx=4)
+            ttk.Button(qb2, text='Delete path', command=self.lp_path_del_path).pack(side='left', padx=4)
+            qb3 = ttk.Frame(qpan)
+            qb3.grid(row=3, column=0, columnspan=5, sticky='w', pady=(4, 0))
+            ttk.Button(qb3, text='Link nodes…', command=self.lp_path_add_edge).pack(side='left')
+            ttk.Button(qb3, text='Unlink', command=self.lp_path_del_edge).pack(side='left', padx=4)
+            ttk.Label(qb3, foreground='#606060', text=(
+                '  Edges are stored in both directions and their lengths are rewritten when you apply. '
+                'The AI uses these graphs to walk patrol routes.')).pack(side='left', padx=6)
 
-            qf = ttk.PanedWindow(qp, orient='vertical')
-            qf.pack(fill='both', expand=True)
-            qtablef = ttk.Frame(qf)
-            qf.add(qtablef, weight=3)
-            qtool = ttk.Frame(qtablef)
-            qtool.pack(fill='x')
-            ttk.Button(qtool, text='+', width=3, style='Small.TButton',
-                       command=self.lp_path_add_node).pack(side='left')
-            ttk.Button(qtool, text='−', width=3, style='Small.TButton',
-                       command=self.lp_path_del_node).pack(side='left', padx=2)
-            ttk.Button(qtool, text='+P', width=3, style='Small.TButton',
-                       command=self.lp_path_add_path).pack(side='left')
-            ttk.Button(qtool, text='−P', width=3, style='Small.TButton',
-                       command=self.lp_path_del_path).pack(side='left', padx=2)
-            ttk.Button(qtool, text='⇄', width=3, style='Small.TButton',
-                       command=self.lp_path_add_edge).pack(side='left')
-            ttk.Button(qtool, text='⇎', width=3, style='Small.TButton',
-                       command=self.lp_path_del_edge).pack(side='left', padx=2)
-            ttk.Label(qtool, text='node add/remove, path add/remove, link/unlink',
-                      style='Hint.TLabel').pack(side='left', padx=6)
-            qtreef = ttk.Frame(qtablef)
-            qtreef.pack(fill='both', expand=True)
-            qcols = ('node', 'x', 'y', 'z', 'deg')
-            qheads = ('node', 'X', 'Y', 'Z', 'links')
-            qwidths = (60, 90, 90, 90, 60)
-            self.lp_path_tree = ttk.Treeview(qtreef, columns=qcols, show='tree headings',
-                                             selectmode='browse', height=7)
-            self.lp_path_tree.heading('#0', text='path')
-            self.lp_path_tree.column('#0', width=170, stretch=True, anchor='w')
-            for c, hd, wd in zip(qcols, qheads, qwidths):
-                self.lp_path_tree.heading(c, text=hd)
-                self.lp_path_tree.column(c, width=wd, stretch=False, anchor='center')
-            qsb = ttk.Scrollbar(qtreef, command=self.lp_path_tree.yview)
-            self.lp_path_tree.configure(yscrollcommand=qsb.set)
-            self.lp_path_tree.pack(side='left', fill='both', expand=True)
-            qsb.pack(side='right', fill='y')
-            self.lp_path_tree.bind('<<TreeviewSelect>>', self.on_lp_path_select)
-            self.lp_path_tree.bind('<Double-1>', lambda e: self.lp_focus_sel())
-
-            # ---- data tab (.char .plt .ico .crt .nsbca .nslbc .tex)
-            dt = ttk.Frame(self.nb)
-            self.nb.add(dt, text='Data')
-            dbar = ttk.Frame(dt)
-            dbar.pack(fill='x')
-            self.data_label = tk.StringVar(value=(
-                'Open a .char, .plt, .ico, .crt, .nsbca, .nslbc or .tex file in the list on the left.'))
-            ttk.Label(dbar, textvariable=self.data_label).pack(side='left')
-            self.btn_data_reload = ttk.Button(dbar, text='Reload', command=self.reload_data)
-            self.btn_data_reload.pack(side='right')
-            self.btn_data_png = ttk.Button(dbar, text='Save PNG…', command=self.save_data_png,
-                                           state='disabled')
-            self.btn_data_png.pack(side='right', padx=4)
-            self.btn_data_import = ttk.Button(dbar, text='Import PNG…', command=self.import_data_png,
-                                              state='disabled')
-            self.btn_data_import.pack(side='right')
-
-            # Palette chips are shown only for .plt files.
-            self.data_pal_bar = ttk.Frame(dt)
-            palhdr = ttk.Frame(self.data_pal_bar)
-            palhdr.pack(fill='x')
-            ttk.Label(palhdr, text='Palette (click a colour to change it):').pack(side='left')
-            self.btn_pal_apply = ttk.Button(palhdr, text='Apply palette and save',
-                                            command=self.apply_data_palette)
-            self.btn_pal_apply.pack(side='left', padx=8)
-            chips = ttk.Frame(self.data_pal_bar)
-            chips.pack(fill='x', pady=(2, 2))
-            self.data_swatches = []
-            for i in range(16):
-                b = tk.Button(chips, text=str(i), width=2, relief='solid', borderwidth=1,
-                              font=('Consolas', 8),
-                              command=lambda i=i: self.edit_palette_color(i))
-                b.pack(side='left', padx=1)
-                self.data_swatches.append(b)
-            self.data_pal_bar.pack_forget()
-
-            pfb = ttk.LabelFrame(dt, text=' Byte patch (a backup is kept in _backup) ', padding=6)
-            pfb.pack(side='bottom', fill='x', pady=(6, 0))
-            ttk.Label(pfb, text='Offset (hex)').grid(row=0, column=0, sticky='e')
-            self.data_patch_off = tk.StringVar(value='0')
-            ttk.Entry(pfb, textvariable=self.data_patch_off, width=10).grid(
-                row=0, column=1, padx=4)
-            ttk.Label(pfb, text='Bytes (hex)').grid(row=0, column=2, sticky='e')
-            self.data_patch_bytes = tk.StringVar()
-            ttk.Entry(pfb, textvariable=self.data_patch_bytes, width=44).grid(
-                row=0, column=3, padx=4, sticky='ew')
-            ttk.Button(pfb, text='Apply patch', command=self.apply_data_patch).grid(
-                row=0, column=4, padx=(8, 0))
-            ttk.Label(pfb, style='Hint.TLabel', text=(
-                'Example: offset 200, bytes 00 FF 7A. The bytes are written into the file; '
-                'Reload re-reads it. The hex view below is read-only.'), wraplength=780,
-                justify='left').grid(row=1, column=0, columnspan=5, sticky='w', pady=(3, 0))
-            pfb.columnconfigure(3, weight=1)
-
-            db = ttk.PanedWindow(dt, orient='horizontal')
-            db.pack(fill='both', expand=True, pady=(4, 0))
-            self.data_split = db
-            dl = ttk.Frame(db)
-            db.add(dl, weight=2)
-            ttk.Label(dl, text='File information', style='DockHeader.TLabel').pack(fill='x')
-            smf = ttk.Frame(dl)
-            smf.pack(fill='both', expand=True)
-            self.data_summary = tk.Text(smf, width=48, wrap='word', state='disabled',
-                                        background='#ffffff', foreground='#000000',
-                                        relief='solid', borderwidth=1, font=('Consolas', 9))
-            ssb = ttk.Scrollbar(smf, command=self.data_summary.yview)
-            self.data_summary.configure(yscrollcommand=ssb.set)
-            self.data_summary.pack(side='left', fill='both', expand=True)
-            ssb.pack(side='right', fill='y')
-            dr = ttk.Frame(db)
-            db.add(dr, weight=5)
-            self.data_nb = ttk.Notebook(dr, style='Section.TNotebook')
-            self.data_nb.pack(fill='both', expand=True)
-            prev = ttk.Frame(self.data_nb, padding=2)
-            self.data_nb.add(prev, text='Preview')
-            self.data_note = tk.StringVar(value='')
-            ttk.Label(prev, textvariable=self.data_note, style='Hint.TLabel').pack(anchor='w')
-            self.data_preview = tk.Canvas(prev, background='#303030', highlightthickness=1,
-                                          highlightbackground='#7a7a7a')
-            self.data_preview.pack(fill='both', expand=True)
-            self.data_preview.bind('<Configure>', lambda e: self._draw_data_preview())
-            hx = ttk.Frame(self.data_nb, padding=2)
-            self.data_nb.add(hx, text='Bytes (hex)')
-            hbar = ttk.Frame(hx)
-            hbar.pack(fill='x')
-            ttk.Label(hbar, text='From offset (hex)').pack(side='left')
-            self.data_hex_off_var = tk.StringVar(value='0')
-            ttk.Entry(hbar, textvariable=self.data_hex_off_var, width=9).pack(side='left', padx=4)
-            ttk.Button(hbar, text='Go', width=4, style='Small.TButton',
-                       command=self.goto_data_hex).pack(side='left')
-            ttk.Button(hbar, text='◀ 8 KB', style='Small.TButton',
-                       command=lambda: self.page_data_hex(-1)).pack(side='left', padx=(8, 2))
-            ttk.Button(hbar, text='8 KB ▶', style='Small.TButton',
-                       command=lambda: self.page_data_hex(1)).pack(side='left')
-            self.data_hex_range = tk.StringVar(value='')
-            ttk.Label(hbar, textvariable=self.data_hex_range,
-                      style='Hint.TLabel').pack(side='left', padx=8)
-            self.data_hex = tk.Text(hx, wrap='none', state='disabled', font=('Consolas', 9),
-                                    background='#ffffff', foreground='#000000',
-                                    relief='solid', borderwidth=1)
-            hsb = ttk.Scrollbar(hx, command=self.data_hex.yview)
-            self.data_hex.configure(yscrollcommand=hsb.set)
-            self.data_hex.pack(side='left', fill='both', expand=True)
-            hsb.pack(side='right', fill='y')
-
-            # ---- names tab (CodeStrings.CHR)
-            ct = ttk.Frame(self.nb)
-            self.nb.add(ct, text='Names (.CHR)')
-            cbar = ttk.Frame(ct)
-            cbar.pack(fill='x')
-            self.chr_label = tk.StringVar(value=(
-                'Open a level\'s CodeStrings.CHR in the list on the left to see and edit its names.'))
-            ttk.Label(cbar, textvariable=self.chr_label).pack(side='left')
-            self.btn_chr_reload = ttk.Button(cbar, text='Reload', command=self.reload_chr)
-            self.btn_chr_reload.pack(side='right')
-            self.btn_chr_add = ttk.Button(cbar, text='Add name…', command=self.add_chr_name,
-                                          state='disabled')
-            self.btn_chr_add.pack(side='right', padx=4)
-
-            cef = ttk.LabelFrame(ct, text=' Selected name ', padding=6)
-            cef.pack(side='bottom', fill='x', pady=(6, 0))
-            ttk.Label(cef, text='Index').grid(row=0, column=0, sticky='e')
-            self.chr_index_var = tk.StringVar(value='—')
-            ttk.Label(cef, textvariable=self.chr_index_var, width=5).grid(
-                row=0, column=1, sticky='w', padx=(4, 12))
-            ttk.Label(cef, text='Name (latin-1)').grid(row=0, column=2, sticky='e')
-            self.chr_name_var = tk.StringVar()
-            self.chr_entry = ttk.Entry(cef, textvariable=self.chr_name_var)
-            self.chr_entry.grid(row=0, column=3, sticky='ew', padx=4)
-            self.btn_chr_save = ttk.Button(cef, text='Apply and save', command=self.save_chr_name,
-                                           state='disabled')
-            self.btn_chr_save.grid(row=0, column=4, padx=(8, 0))
-            ttk.Label(cef, style='Hint.TLabel', text=(
-                'CodeStrings.CHR is the name table that Objects.LP points into (its "id" column). '
-                'Changing a name keeps every id, so placements keep working and the table may grow '
-                'or shrink. Use "Add name…" to append; existing entries are never reordered or '
-                'deleted. A backup is kept in _backup.'), wraplength=760,
-                justify='left').grid(row=1, column=0, columnspan=5, sticky='w', pady=(4, 0))
-            cef.columnconfigure(3, weight=1)
-            self.chr_name_var.trace_add('write', self._on_chr_edit)
-
-            cf = ttk.Frame(ct)
-            cf.pack(fill='both', expand=True, pady=(4, 0))
-            cols = ('idx', 'offset', 'length', 'used', 'name')
-            heads = ('#', 'offset', 'bytes', 'used by', 'name')
-            widths = (52, 80, 60, 66, 470)
-            self.chr_tree = ttk.Treeview(cf, columns=cols, show='headings',
-                                         selectmode='browse', height=10)
-            for c, hd, wd in zip(cols, heads, widths):
-                self.chr_tree.heading(c, text=hd)
-                self.chr_tree.column(c, width=wd, stretch=(c == 'name'),
-                                     anchor='w' if c == 'name' else 'center')
-            csb = ttk.Scrollbar(cf, command=self.chr_tree.yview)
-            self.chr_tree.configure(yscrollcommand=csb.set)
-            self.chr_tree.pack(side='left', fill='both', expand=True)
-            csb.pack(side='right', fill='y')
-            self.chr_tree.bind('<<TreeviewSelect>>', self.on_chr_select)
-            self.chr_tree.bind('<Double-1>', lambda e: self.chr_entry.focus_set())
-
-            # Document tabs are hidden/shown per selected file type. Hiding a tab
-            # keeps it in Notebook.tabs(), so the hard-coded indices used when a
-            # file loads stay valid.
-            self.doc_tabs = {
-                'model': (mt, 'Model'),
-                'textures': (tt, 'Textures'),
-                'text': (xt, 'Text'),
-                'rooms': (rt, 'Rooms (.ROO)'),
-                'placement': (pt, 'Placement (.LP)'),
-                'data': (dt, 'Data'),
-                'names': (ct, 'Names (.CHR)'),
-            }
-            self.doc_tab_hidden = {key: False for key in self.doc_tabs}
-
-        # ------------------------------------------------------- document tabs
-        def _set_doc_tabs(self, *keys):
-            """Show only the document tabs relevant to the selected file."""
-            wanted = set(keys) if keys else set(self.doc_tabs)
-            for key, (widget, text) in self.doc_tabs.items():
-                show = key in wanted
-                hidden = self.doc_tab_hidden[key]
-                if show and hidden:
-                    self.nb.add(widget, text=text)
-                    self.doc_tab_hidden[key] = False
-                elif not show and not hidden:
-                    self.nb.hide(widget)
-                    self.doc_tab_hidden[key] = True
-
-        def _show_doc_tabs_for(self, path):
-            low = path.lower()
-            if low.endswith('.chr'):
-                tabs = ('names',)
-            elif extra_files.is_data_file(path):
-                tabs = ('data',)
-            elif low.endswith(('.txt', '.lvl')):
-                tabs = ('text',)
-            elif low.endswith('.cvhm'):
-                tabs = ('model',)
-            elif low.endswith('.lp'):
-                tabs = ('placement',)
-            elif low.endswith('.roo'):
-                tabs = ('rooms',)
-            elif low.endswith('.nsbtx'):
-                tabs = ('textures',)
-            elif low.endswith('.nsbmd'):
-                tabs = ('model', 'textures')
-            else:
-                tabs = None                 # unsupported: leave every tab available
-            self._set_doc_tabs(*(tabs or ()))
-            if tabs:
-                # Until the loader selects its own tab, show the primary one even
-                # if the file turns out to be malformed.
-                self.nb.select(self.doc_tabs[tabs[0]][0])
+            # ---- log
+            lf = ttk.Frame(self, padding=(6, 4))
+            lf.pack(fill='x')
+            self.progress = ttk.Progressbar(lf, mode='indeterminate')
+            self.progress.pack(fill='x')
+            self.log_text = tk.Text(lf, height=7, state='disabled', wrap='word')
+            self.log_text.pack(fill='x', pady=(4, 0))
 
         def report_callback_exception(self, exc, val, tb):
             msg = ''.join(traceback.format_exception(exc, val, tb))
@@ -1487,9 +922,6 @@ if tk is not None:
                 return
             if not self._confirm_discard_text():
                 return
-            if self.chr_dirty and not messagebox.askyesno(
-                    'Names', 'Discard the change you typed for name %s?' % self.chr_index):
-                return
             if self._room_dirty() and not messagebox.askyesno(
                     'Rooms', 'Discard the room box values you typed but did not save?'):
                 return
@@ -1508,20 +940,6 @@ if tk is not None:
         def load_path(self, path, tex_index=None):
             low = path.lower()
             self.cur_path = path
-            self.dock_file.set(os.path.basename(path))
-            self.dock_kind.set(
-                'level text' if low.endswith('.lvl') else
-                'text' if low.endswith('.txt') else
-                'collision' if low.endswith('.cvhm') else
-                'placement' if low.endswith('.lp') else
-                'rooms' if low.endswith('.roo') else
-                'names' if low.endswith('.chr') else
-                'image' if low.endswith(('.char', '.plt', '.ico')) else
-                'data' if low.endswith(('.crt', '.nsbca', '.nslbc', '.tex')) else
-                'model' if low.endswith(('.nsbmd', '.nsbtx')) else 'file')
-            self._show_doc_tabs_for(path)
-            self.dock_collision.set('no collision loaded')
-            self.dock_collision_tris.set('0')
             self.loaded = None
             self.collision = None
             self.roo = None
@@ -1556,11 +974,9 @@ if tk is not None:
             self.pal_var.set('')
             self.tex_info.set('')
             self._set_text('', False)
-            self._clear_data()
-            self._clear_chr()
             self.btn_revert.configure(state='normal' if self._has_backup(path) else 'disabled')
             name = os.path.basename(path)
-            if low.endswith(('.txt', '.lvl')):
+            if low.endswith('.txt'):
                 try:
                     txt, info = read_text_doc(path)
                 except Exception as e:
@@ -1570,20 +986,8 @@ if tk is not None:
                 self._set_text(txt, True)
                 self.text_label.set('%s  (%s line endings, %s) - editable'
                                     % (name, 'CRLF' if info['newline'] == '\r\n' else 'LF', info['encoding']))
-                if low.endswith('.lvl'):
-                    sections = extra_files.lvl_sections(txt)
-                    self.info.set('%s  -  level text, %d section(s): %s'
-                                  % (name, len(sections), ', '.join(sections)))
-                else:
-                    self.info.set('%s  -  text, %d lines, %d characters'
-                                  % (name, txt.count('\n') + 1, len(txt)))
+                self.info.set('%s  -  text, %d lines, %d characters' % (name, txt.count('\n') + 1, len(txt)))
                 self.nb.select(2)
-                return
-            if extra_files.is_data_file(path):
-                self.load_data(path)
-                return
-            if low.endswith('.chr'):
-                self.load_chr(path)
                 return
             if low.endswith('.cvhm'):
                 try:
@@ -1593,8 +997,6 @@ if tk is not None:
                     return
                 self.collision = col
                 self.view_tris = col.triangles()
-                self.dock_collision.set(name)
-                self.dock_collision_tris.set(str(len(self.view_tris)))
                 self.view = bounds(self.view_tris)
                 self.base_view = self.view
                 parts = ', '.join('%s: %d verts / %d tris' % (m.name, len(m.verts), len(m.tris))
@@ -1714,433 +1116,6 @@ if tk is not None:
                     'Reload', 'Discard the unsaved changes to %s?' % os.path.basename(self.text_path)):
                 return
             self.load_path(self.text_path)
-
-        # ------------------------------------------------------- data files view
-        def _set_readonly_text(self, widget, text):
-            widget.configure(state='normal')
-            widget.delete('1.0', 'end')
-            widget.insert('1.0', text)
-            widget.configure(state='disabled')
-
-        def _clear_data(self):
-            self.data = None
-            self.data_raw = b''
-            self.data_hex_off = 0
-            self.data_palette = None
-            self.data_char_raw = None
-            self.btn_data_import.configure(state='disabled')
-            self.btn_data_png.configure(state='disabled')
-            self.data_label.set('Open a .char, .plt, .ico, .crt, .nsbca, .nslbc or .tex file '
-                                'in the list on the left.')
-            self.data_note.set('')
-            self.data_pal_bar.pack_forget()
-            self._set_readonly_text(self.data_summary, '')
-            self.data_preview.delete('all')
-            self.data_photo = None
-            self._set_hex_text('', 0)
-
-        def load_data(self, path):
-            name = os.path.basename(path)
-            try:
-                ex = extra_files.open_extra(path)
-                raw = open(path, 'rb').read()
-            except Exception as e:
-                self.info.set('%s: could not read (%s)' % (name, e))
-                return
-            self.data = ex
-            self.data_raw = raw
-            self.data_label.set('%s  (%s bytes) - view and edit below'
-                                % (name, format(len(raw), ',')))
-            self._set_readonly_text(self.data_summary, ex.summary)
-            self.btn_data_import.configure(state='normal' if ex.import_kind else 'disabled')
-            self.btn_data_png.configure(state='normal' if ex.image else 'disabled')
-            self.data_note.set(ex.preview_note)
-            self.data_palette = list(ex.palette) if ex.palette else None
-            self.data_char_raw = ex.char_raw
-            if ex.palette_editable:
-                self.data_pal_bar.pack(fill='x', pady=(4, 0), before=self.data_split)
-                self._update_swatches()
-            else:
-                self.data_pal_bar.pack_forget()
-            self._draw_data_preview()
-            self.show_data_hex(0)
-            self.data_nb.select(0 if ex.kind == 'image' else 1)
-            self.nb.select(5)
-            self.info.set('%s  -  %s' % (name, 'picture' if ex.kind == 'image' else 'data file'))
-
-        def reload_data(self):
-            if self.cur_path and self.data:
-                self.load_path(self.cur_path)
-
-        def _update_swatches(self):
-            for i, b in enumerate(self.data_swatches):
-                if self.data_palette and i < len(self.data_palette):
-                    r, g, bl = self.data_palette[i][:3]
-                    lum = (r + g + bl) / 3
-                    col = '#%02X%02X%02X' % (r, g, bl)
-                    b.configure(background=col, activebackground=col,
-                                foreground='#000000' if lum > 128 else '#ffffff')
-                else:
-                    b.configure(background='#f0f0f0', activebackground='#f0f0f0',
-                                foreground='#000000')
-
-        def edit_palette_color(self, index):
-            if not self.data_palette or index >= len(self.data_palette):
-                return
-            col = self.data_palette[index]
-            rgb, _hex = colorchooser.askcolor(
-                color='#%02X%02X%02X' % tuple(col[:3]),
-                title='Palette colour %d' % index)
-            if not rgb:
-                return
-            self.data_palette[index] = tuple(int(v) for v in rgb)
-            self._update_swatches()
-            if self.data_char_raw:
-                self.data.image = extra_files.decode_char(self.data_char_raw, self.data_palette)
-            else:
-                self.data.image = extra_files.palette_strip(self.data_palette)
-            self._draw_data_preview()
-
-        def _draw_data_preview(self):
-            c = self.data_preview
-            c.delete('all')
-            im = self.data.image if self.data else None
-            w = max(1, c.winfo_width())
-            h = max(1, c.winfo_height())
-            if im is None:
-                if self.data:
-                    c.create_text(w // 2, h // 2, anchor='center', fill='#c8c8c8',
-                                  justify='center', font=('Segoe UI', 10),
-                                  text='No picture preview for this format.\n'
-                                       'Use the "Bytes (hex)" page and the patch box below.')
-                return
-            iw, ih = im.size
-            scale = max(1, min((w - 16) // iw, (h - 16) // ih))
-            scale = min(scale, 16)
-            self.data_photo = ImageTk.PhotoImage(
-                im.resize((iw * scale, ih * scale), Image.NEAREST))
-            c.create_image(w // 2, h // 2, image=self.data_photo, anchor='center')
-            c.create_text(6, 6, anchor='nw', text='%dx%d  (shown %dx)' % (iw, ih, scale),
-                          fill='#c8c8c8', font=('Segoe UI', 8))
-
-        def import_data_png(self):
-            if not self.cur_path or not self.data or not self.data.import_kind:
-                return
-            p = filedialog.askopenfilename(
-                title='PNG to import into %s' % os.path.basename(self.cur_path),
-                filetypes=[('PNG picture', '*.png'), ('All files', '*.*')])
-            if not p:
-                return
-            what = {'char': '32x32 graphic (and its 16-colour palette)',
-                    'plt': '16 palette colours',
-                    'ico': '64x64 portrait'}[self.data.import_kind]
-            if not messagebox.askyesno(
-                    'Import PNG', 'Replace the %s of\n%s\nwith the picture %s?\n\n'
-                    'A copy of the original files is kept in _backup.'
-                    % (what, os.path.basename(self.cur_path), os.path.basename(p))):
-                return
-            work = self.work_var.get().strip()
-            try:
-                backup_file(work, self.cur_path)
-                if self.data.import_kind == 'char' and self.data.companion:
-                    backup_file(work, self.data.companion)
-                res = extra_files.import_png(self.cur_path, p)
-            except Exception as e:
-                return messagebox.showerror('Import PNG', 'Could not import:\n%s' % e)
-            for path_, desc in res['written']:
-                self.log('imported %s -> %s (%s)' % (os.path.basename(p), path_, desc))
-            if res['note']:
-                self.log(res['note'])
-            self.log('Repack the ROM to test it.')
-            self.load_path(self.cur_path)
-
-        def save_data_png(self):
-            if not self.cur_path or not self.data or not self.data.image:
-                return
-            base = os.path.splitext(os.path.basename(self.cur_path))[0]
-            p = filedialog.asksaveasfilename(
-                title='Save picture as PNG', defaultextension='.png',
-                initialfile=base + '.png', filetypes=[('PNG picture', '*.png')])
-            if not p:
-                return
-            try:
-                self.data.image.save(p)
-            except Exception as e:
-                return messagebox.showerror('Save PNG', 'Could not save:\n%s' % e)
-            self.log('saved picture %s' % p)
-
-        def apply_data_palette(self):
-            if not self.cur_path or not self.data_palette:
-                return
-            work = self.work_var.get().strip()
-            try:
-                backup_file(work, self.cur_path)
-                extra_files.write_plt(self.cur_path, self.data_palette)
-            except Exception as e:
-                return messagebox.showerror('Palette', 'Could not save:\n%s' % e)
-            self.log('saved palette %s (%d colours)' % (self.cur_path, len(self.data_palette)))
-            self.log('Repack the ROM to test it.')
-            self.load_path(self.cur_path)
-
-        def _set_hex_text(self, text, offset):
-            self.data_hex.configure(state='normal')
-            self.data_hex.delete('1.0', 'end')
-            self.data_hex.insert('1.0', text)
-            self.data_hex.configure(state='disabled')
-            self.data_hex.yview_moveto(0)
-            self.data_hex_off = offset
-            self.data_hex_off_var.set('0x%X' % offset)
-            if self.data_raw:
-                end = min(len(self.data_raw), offset + extra_files.HEX_PAGE)
-                self.data_hex_range.set('0x%X - 0x%X of 0x%X'
-                                        % (offset, max(offset, end - 1), len(self.data_raw)))
-            else:
-                self.data_hex_range.set('')
-
-        def show_data_hex(self, offset):
-            if not self.data_raw:
-                self._set_hex_text('', 0)
-                return
-            offset = max(0, min(offset, len(self.data_raw) - 1))
-            offset -= offset % 16
-            self._set_hex_text('\n'.join(extra_files.hex_lines(self.data_raw, offset)), offset)
-
-        def goto_data_hex(self):
-            if not self.data_raw:
-                return
-            try:
-                off = extra_files.parse_offset(self.data_hex_off_var.get(), len(self.data_raw))
-            except Exception as e:
-                return messagebox.showerror('Hex view', str(e))
-            self.show_data_hex(off)
-
-        def page_data_hex(self, direction):
-            if not self.data_raw:
-                return
-            self.show_data_hex(self.data_hex_off + direction * extra_files.HEX_PAGE)
-
-        def apply_data_patch(self):
-            if not self.cur_path or not self.data:
-                return
-            try:
-                off = extra_files.parse_offset(self.data_patch_off.get(), len(self.data_raw))
-                blob = extra_files.parse_hex_bytes(self.data_patch_bytes.get())
-                if off + len(blob) > len(self.data_raw):
-                    raise extra_files.ExtraError(
-                        'the patch runs past the end of the file (size 0x%X)' % len(self.data_raw))
-            except Exception as e:
-                return messagebox.showerror('Byte patch', str(e))
-            if not messagebox.askyesno(
-                    'Byte patch', 'Write %d byte(s) at 0x%X of %s?\n\n'
-                    'A copy of the original is kept in _backup.'
-                    % (len(blob), off, os.path.basename(self.cur_path))):
-                return
-            work = self.work_var.get().strip()
-            try:
-                backup_file(work, self.cur_path)
-                extra_files.apply_patch(self.cur_path, off, blob)
-            except Exception as e:
-                return messagebox.showerror('Byte patch', 'Could not write:\n%s' % e)
-            self.log('patched %s: %d byte(s) at 0x%X'
-                     % (self.cur_path, len(blob), off))
-            self.log('Repack the ROM to test it.')
-            self.load_path(self.cur_path)
-            self.show_data_hex(off)
-
-        # ------------------------------------------------------- names view (.CHR)
-        def _clear_chr(self):
-            self.chr_doc = None
-            self.chr_path = None
-            self.chr_refs = None
-            self.chr_index = None
-            self.chr_dirty = False
-            self.chr_loading = True
-            self.chr_name_var.set('')
-            self.chr_loading = False
-            self.chr_index_var.set('—')
-            self.chr_label.set('Open a level\'s CodeStrings.CHR in the list on the left to see and '
-                               'edit its names.')
-            self.chr_tree.delete(*self.chr_tree.get_children())
-            self.btn_chr_add.configure(state='disabled')
-            self.btn_chr_save.configure(state='disabled')
-
-        def _chr_references(self, path):
-            """Count how many Objects.LP records point at each CHR index."""
-            lp_path = os.path.join(os.path.dirname(path), 'Objects.LP')
-            if not os.path.exists(lp_path):
-                return None
-            try:
-                lp = lpmod.parse(lp_path)
-                counts = {}
-                for rec in lp.records():
-                    counts[rec.h1] = counts.get(rec.h1, 0) + 1
-                return counts
-            except Exception:
-                return None
-
-        def load_chr(self, path, select=None):
-            name = os.path.basename(path)
-            try:
-                doc = lpmod.load_chr(path)
-            except Exception as e:
-                self.info.set('%s: could not parse CodeStrings.CHR (%s)' % (name, e))
-                return
-            self.chr_doc = doc
-            self.chr_path = path
-            self.chr_refs = self._chr_references(path)
-            self._fill_chr_table()
-            self.chr_label.set('%s  (%s bytes, %d names) - edit a name below'
-                               % (name, format(os.path.getsize(path), ','), doc.count))
-            self.chr_dirty = False
-            self.btn_chr_add.configure(state='normal')
-            self.btn_chr_save.configure(state='disabled')
-            self.info.set('%s  -  %d name(s), %d byte(s) of strings'
-                          % (name, doc.count, doc.string_size))
-            self.nb.select(6)
-            if doc.count:
-                idx = select if select is not None and 0 <= select < doc.count else 0
-                self.chr_tree.selection_set(str(idx))
-                self.chr_tree.see(str(idx))
-                self.on_chr_select()
-
-        def _fill_chr_table(self):
-            tree = self.chr_tree
-            tree.delete(*tree.get_children())
-            doc = self.chr_doc
-            if doc is None:
-                return
-            for i, s in enumerate(doc.strings):
-                off = doc.base + doc.offsets[i]
-                used = ('?' if self.chr_refs is None
-                        else str(self.chr_refs.get(i, 0)))
-                tree.insert('', 'end', iid=str(i), values=(
-                    i, '0x%X' % off, len(s.encode('latin-1')) + 1, used, s))
-
-        def _on_chr_edit(self, *_):
-            if self.chr_loading or self.chr_doc is None or self.chr_index is None:
-                return
-            self.chr_dirty = True
-            self.btn_chr_save.configure(state='normal')
-
-        def on_chr_select(self, _e=None):
-            sel = self.chr_tree.selection()
-            if not sel or self.chr_doc is None:
-                return
-            idx = int(sel[0])
-            if idx >= self.chr_doc.count:
-                return
-            if idx != self.chr_index and self.chr_dirty:
-                if not messagebox.askyesno(
-                        'Names', 'Discard the change you typed for name %s?' % self.chr_index):
-                    if self.chr_index is not None:
-                        self.chr_tree.selection_set(str(self.chr_index))
-                    return
-            if idx == self.chr_index and self.chr_dirty:
-                # The selection was just put back after a declined discard; keep the
-                # text the user typed instead of reloading the saved name.
-                return
-            self.chr_index = idx
-            self.chr_loading = True
-            self.chr_name_var.set(self.chr_doc.strings[idx])
-            self.chr_loading = False
-            self.chr_dirty = False
-            self.chr_index_var.set(str(idx))
-            self.btn_chr_save.configure(state='normal')
-
-        @staticmethod
-        def _check_chr_name(text):
-            if '\x00' in text:
-                raise ValueError('A name cannot contain a NUL character.')
-            try:
-                text.encode('latin-1')
-            except UnicodeEncodeError:
-                raise ValueError('This file stores latin-1 text only; remove the characters '
-                                 'that have no latin-1 equivalent.')
-
-        def _write_chr(self, data):
-            work = self.work_var.get().strip()
-            backup_file(work, self.chr_path)
-            with open(self.chr_path, 'wb') as f:
-                f.write(data)
-
-        def save_chr_name(self):
-            doc, idx = self.chr_doc, self.chr_index
-            if doc is None or idx is None:
-                return
-            text = self.chr_name_var.get()
-            try:
-                self._check_chr_name(text)
-            except ValueError as e:
-                return messagebox.showerror('Names', str(e))
-            old = doc.strings[idx]
-            if text == old:
-                self.chr_dirty = False
-                self.btn_chr_save.configure(state='disabled')
-                return self.log('name %d unchanged' % idx)
-            doc.strings[idx] = text
-            try:
-                data = doc.to_bytes()
-            except Exception as e:
-                doc.strings[idx] = old
-                return messagebox.showerror('Names', 'The name table is too large:\n%s' % e)
-            try:
-                self._write_chr(data)
-            except Exception as e:
-                doc.strings[idx] = old
-                return messagebox.showerror('Names', 'Could not save:\n%s' % e)
-            self.log('saved name %d: "%s" (%d -> %d bytes)'
-                     % (idx, text, len(old.encode('latin-1')) + 1,
-                        len(text.encode('latin-1')) + 1))
-            self.log('Repack the ROM to test it.')
-            self.load_chr(self.chr_path, select=idx)
-
-        def add_chr_name(self):
-            doc = self.chr_doc
-            if doc is None:
-                return
-            if self.chr_dirty and not messagebox.askyesno(
-                    'Add name', 'Discard the change you typed for name %s?' % self.chr_index):
-                return
-            name = simpledialog.askstring(
-                'Add name', 'Append a new name to CodeStrings.CHR:\n\n'
-                'The new entry gets the next id; existing ids do not change.', parent=self)
-            if name is None:
-                return
-            if not name:
-                return messagebox.showerror('Add name', 'Enter a name first.')
-            try:
-                self._check_chr_name(name)
-            except ValueError as e:
-                return messagebox.showerror('Add name', str(e))
-            old_strings = list(doc.strings)
-            old_offsets = list(doc.offsets)
-            old_size = doc.string_size
-            try:
-                new_index = doc.append([name])[0]
-                data = doc.to_bytes()
-            except Exception as e:
-                doc.strings = old_strings
-                doc.offsets = old_offsets
-                doc.string_size = old_size
-                return messagebox.showerror('Add name', 'The name table is too large:\n%s' % e)
-            try:
-                self._write_chr(data)
-            except Exception as e:
-                doc.strings = old_strings
-                doc.offsets = old_offsets
-                doc.string_size = old_size
-                return messagebox.showerror('Add name', 'Could not save:\n%s' % e)
-            self.log('added name %d: "%s"' % (new_index, name))
-            self.log('Repack the ROM to test it.')
-            self.load_chr(self.chr_path, select=new_index)
-
-        def reload_chr(self):
-            if not self.chr_path:
-                return
-            if self.chr_dirty and not messagebox.askyesno(
-                    'Reload', 'Discard the change you typed for name %s?' % self.chr_index):
-                return
-            self.load_chr(self.chr_path, select=self.chr_index)
 
         # ------------------------------------------------------------ rooms view
         def fill_rooms(self):
@@ -3105,10 +2080,6 @@ if tk is not None:
             self.redraw(fast=True)
 
         def redraw(self, fast=False):
-            if getattr(self, 'dock_yaw', None) is not None:
-                self.dock_yaw.set('%.2f' % self.yaw)
-                self.dock_pitch.set('%.2f' % self.pitch)
-                self.dock_zoom.set('%.3f' % self.zoom)
             c = self.canvas
             c.delete('all')
             w, h = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
@@ -3329,8 +2300,6 @@ if tk is not None:
             targets = [path]
             if L and L.tex_path and L.tex_path != path:
                 targets.append(L.tex_path)
-            if self.data and self.data.import_kind == 'char' and self.data.companion:
-                targets.append(self.data.companion)
             targets = [p for p in targets if p and os.path.exists(backup_path(work, p))]
             if not targets:
                 return

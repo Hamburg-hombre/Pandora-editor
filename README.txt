@@ -11,24 +11,9 @@ Setup
 Workflow
   - Pick your .nds, click "Unpack ROM", browse the files on the left.
   - .nsbmd = models, .nsbtx = shared textures, .cvhm = collision, .roo = room boxes (now editable),
-    .lp = enemy/object placements and paths, .chr = the level name table (both now editable),
-    .txt and .lvl = text (now editable), .char/.plt/.ico = pictures and palettes, and
-    .crt/.nsbca/.nslbc/.tex = the Data tab (info + hex view/edit).
+    .lp = enemy/object placements and paths (now viewable and editable), .txt = text (now editable).
   - Edit, then "Repack ROM..." writes a new .nds. The first edit of any file keeps a copy in
     <work folder>/_backup ; "Revert file to original" restores it.
-
-Window layout (classic Windows / Mario Kart Toolbox style)
-  - Menu bar: File (open/unpack/repack/export/revert/exit), Edit (save/reload text and the file
-    filter), Tools (view, OBJ and collision actions, room actions), Help (controls and about).
-    Ctrl+O opens a ROM; Ctrl+S saves the open text file.
-  - Left dock: the "Files" tree, its filter and "Export ALL models + collision...".
-  - Main document tabs: Model, Textures, Text, Rooms (.ROO), Placement (.LP), Data, Names (.CHR).
-    Only the tabs that apply to the selected file are shown: a model shows Model + Textures,
-    a .cvhm shows Model, a .txt/.lvl shows Text, a .chr shows Names, and so on.
-  - Model tab: a large black 3D viewport, a right-hand Properties / Collision / File dock, and
-    Collision / Camera section tabs under the viewport.
-  - Tables use the classic white grid with grey headings; the status line and Log dock are at the
-    bottom of the window.
 
 Textures (Textures tab)
   - "Import PNG..." replaces the selected texture in place, in its original DS format.
@@ -98,7 +83,7 @@ Rooms (Rooms tab, Global.ROO)
   coordinates as the models and collision. The game only runs collision while the player is inside
   the room's box, so the box decides where you can walk - that is why a bigger collision model needs
   a bigger box.
-  - Select a Global.ROO in the list on the left. The view above the table (and the Model tab) shows
+  - Select a Global.ROO in the list on the left. The view under the table (and the Model tab) shows
     every box as a wireframe (yellow = selected room, blue = the others) with the room names;
     drag = rotate, right-drag = pan, wheel = zoom.
   - Picking a room centres the view on that room's box; the rotation and zoom stay exactly as they
@@ -125,23 +110,23 @@ Placement (Placement tab, Objects.LP)
     as lines with node dots. Yellow bracket = selected.
   - "Show" and the name filter narrow the table below the view (Everything / Objects /
     Enemies (AI) / Trigger boxes). Double-click a row (or the view) to centre the camera.
-  - The small toolbar above the table is: + add, − delete, ⧉ duplicate, ◎ focus. The table lists
-    every placement: id, its name from the level's CodeStrings.CHR, the template it uses (from
-    Templates.CRT; e.g. "Waypoint", "Barrel", "P90 Example"), and its X/Y/Z. Pick one and edit the
-    three coordinates, then "Apply and save".
+  - The table lists every placement: id, its name from the level's CodeStrings.CHR, the
+    template it uses (from Templates.CRT; e.g. "Waypoint", "Barrel", "P90 Example"), and its
+    X/Y/Z. Pick one and edit the three coordinates, then "Apply and save".
   - Enemies also store a Facing (a whole number of brads; 4096 brads = 360°, so 2048 = 180°).
     Trigger boxes store a centred box (half X, half Z, height); the position is the box
     centre on the floor.
-  - "+" (add placement) asks for the kind (Object / AI enemy / Trigger box), the template and a
+  - "Add placement…" asks for the kind (Object / AI enemy / Trigger box), the template and a
     name. Either reuse an unused name from the level's list, or type a new one - new names
     are appended to the level's CodeStrings.CHR (backed up like everything else). Enemies
     added this way remember the facing of the placement you had selected, if any.
-  - "Duplicate" (⧉) copies the selected placement with a new id and a new name.
-  - "−" (delete placement) removes the record (a backup is kept).
-  - The Paths page lists each path section with its nodes and edges. Its toolbar is:
-    + add node, − remove node, +P add path, −P delete path, ⇄ link nodes, ⇎ unlink. Pick a node,
-    edit its X/Y/Z and "Apply and save"; a new node is added at the camera centre, a removed node
-    takes its edges with it. Edge lengths are always rewritten correctly when you apply.
+  - "Duplicate placement…" copies the selected placement with a new id and a new name.
+  - "Delete placement" removes the record (a backup is kept).
+  - The Paths page lists each path section with its nodes and edges. Pick a node, edit its
+    X/Y/Z and "Apply and save"; "Add node" adds one at the camera centre, "Remove node"
+    deletes it and its edges, "Link nodes…" joins two nodes, "Unlink" removes the edge. Edge
+    lengths are always rewritten correctly when you apply. "Add path" creates a new empty
+    path; "Delete path" removes one.
   - "Apply and save" rewrites Objects.LP (or CodeStrings.CHR) with a backup; repack the ROM
     to test it. The log says what changed.
   - The path graph is how the AI walks patrol routes: each node is a spot, each edge is a
@@ -169,51 +154,7 @@ If something looks wrong
   - Repacked ROM does not boot: keep a copy of the original .nds, and test one small change at a time.
 
 Text (Text tab)
-  - .txt and .lvl files are now editable in the window. "Save text" writes the file back with the
-    original encoding and line endings (CRLF for this game), after keeping a backup copy.
-  - .lvl is the level's Global.LVL: it stores resource lists in BEGIN "section" / END blocks. The
-    status line lists the sections it found, so you can see where you are while editing.
+  - .txt files are now editable in the window. "Save text" writes the file back with the original
+    encoding and line endings (CRLF for this game), after keeping a backup copy.
   - "Reload" throws the unsaved changes away. Ctrl+S also saves.
   - Only text characters the original file can store are allowed (ASCII for these files).
-
-Data tab (.char, .plt, .ico, .crt, .nsbca, .nslbc, .tex)
-  Select one of these files in the list on the left. The Data tab opens with a description on the
-  left, a picture preview or byte view on the right, and a byte patch box at the bottom.
-  - ".char" is a 32x32 picture with 16 colours (4 bits per pixel, 8x8 tile order). The colours
-    live in the matching ".plt" file. "Save PNG..." exports the preview; "Import PNG..." resizes
-    your picture to 32x32, reduces it to 16 colours and rewrites the .char plus its matching .plt
-    (index 0 stays transparent). Both originals go into _backup first.
-  - ".plt" holds the 16 colours. The preview uses the matching .char. Click one of the colour
-    chips, pick a new colour and click "Apply palette and save"; or "Import PNG..." to take the
-    16 main colours from a picture. Only the palette changes, not the pixels.
-  - ".ico" is a 64x64, 256-colour game-icon portrait (palette first, then the pixels). "Save PNG..."
-    exports it; "Import PNG..." rewrites both the palette and the pixels at 64x64.
-  - ".crt" is the object template table. The info panel lists the header, how many object and AI
-    templates exist, and their readable names (from Global.LVL when it is nearby).
-  - ".nsbca" is a NITRO skeletal animation. The info panel shows the animation name, frame count,
-    track count and every track's flags/target, so you can inspect it even though this tool does
-    not play animations.
-  - ".nslbc" is a level's script bytecode. The info panel shows the header words, the 16-byte hash
-    records and the readable strings (names and messages) inside the file.
-  - ".tex" is a texture/data bank whose layout is not decoded yet. The info panel shows its size
-    and byte statistics; use the hex view and patch box.
-  - The "Bytes (hex)" page shows 8 KB at a time. Type an offset (hex) and press Go, or use the
-    8 KB page buttons. The view is read-only.
-  - "Byte patch" writes bytes at an offset (both hexadecimal). Example: offset 200, bytes
-    00 FF 7A. The first edit of a file keeps the original in _backup; "Revert file to original"
-    restores it. Repack the ROM to test a change.
-
-Names (Names (.CHR) tab, CodeStrings.CHR)
-  Every level folder has a CodeStrings.CHR next to Objects.LP. It is the level's name table:
-  placements in Objects.LP store an id (h1) that indexes into it, so one name can be shared.
-  - Select a CodeStrings.CHR in the list on the left. The table lists every name with its id,
-    the byte offset where it starts, its stored length (including the terminating NUL) and how
-    many Objects.LP placements use it ("?" when that level has no readable Objects.LP).
-  - Pick a row, edit the name and click "Apply and save". Every id stays the same, so the
-    placements keep pointing at the right entry even when the text gets longer or shorter.
-  - "Add name..." appends a new name with the next free id. Use it when you need a new name for
-    the Placement tab. Existing entries are never reordered or deleted, because that would
-    change the ids stored in Objects.LP.
-  - Names are latin-1 text (letters, digits, punctuation and common accents); a NUL byte is not
-    allowed. A backup is kept in _backup and "Revert file to original" restores the table.
-    Repack the ROM to test a change.
