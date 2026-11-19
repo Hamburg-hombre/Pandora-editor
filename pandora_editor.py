@@ -860,13 +860,13 @@ if tk is not None:
             ttk.Label(dl, text='File information', font=('Segoe UI', 9, 'bold')).pack(fill='x')
             smf = ttk.Frame(dl)
             smf.pack(fill='both', expand=True)
-            self.data_summary = tk.Text(smf, width=48, wrap='word', state='disabled',
+            self.data_summary = tk.Text(smf, width=40, wrap='word', state='disabled',
                                         background='#ffffff', foreground='#000000',
                                         relief='solid', borderwidth=1, font=('Consolas', 9))
             ssb = ttk.Scrollbar(smf, command=self.data_summary.yview)
             self.data_summary.configure(yscrollcommand=ssb.set)
-            self.data_summary.pack(side='left', fill='both', expand=True)
             ssb.pack(side='right', fill='y')
+            self.data_summary.pack(side='left', fill='both', expand=True)
             dr = ttk.Frame(db)
             db.add(dr, weight=5)
             self.data_nb = ttk.Notebook(dr)
@@ -900,8 +900,8 @@ if tk is not None:
                                     relief='solid', borderwidth=1)
             hsb = ttk.Scrollbar(hx, command=self.data_hex.yview)
             self.data_hex.configure(yscrollcommand=hsb.set)
-            self.data_hex.pack(side='left', fill='both', expand=True)
             hsb.pack(side='right', fill='y')
+            self.data_hex.pack(side='left', fill='both', expand=True)
 
             # ---- names tab (CodeStrings.CHR)
             ct = ttk.Frame(self.nb)
