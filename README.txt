@@ -10,6 +10,12 @@ Setup
 
 Workflow
   - Pick your .nds, click "Unpack ROM", browse the files on the left.
+  - The left panel starts in "Simple" mode, which lists only the level folder names under
+    <work folder>/Levels (1_0_FortKnox, MP_Funhouse, ...). Picking a name only highlights it for
+    now; press "Advanced" to get the full file tree and open the files inside a level.
+  - The filter box narrows whatever list is showing (level names in Simple, file names in Advanced).
+  - The progress bar and log box stay pinned to the bottom of the window; if the window is short,
+    the file list and the tabs get shorter instead of the log disappearing.
   - .nsbmd = models, .nsbtx = shared textures, .cvhm = collision, .roo = room boxes (now editable),
     .lp = enemy/object placements and paths (now viewable and editable), .chr = the level name table
     (now editable), .txt and .lvl = text (now editable), .char/.plt/.ico = pictures and palettes, and

@@ -488,18 +488,41 @@ if tk is not None:
             ttk.Button(top, text='Repack ROM…', command=self.do_repack).grid(row=1, column=3, padx=(8, 0))
             top.columnconfigure(1, weight=1)
 
+            # Pack the log before the body: a short window then shrinks the file
+            # tree/viewport instead of pushing the log below the window edge.
+            lf = ttk.Frame(self, padding=(6, 4))
+            lf.pack(side='bottom', fill='x')
+            self.progress = ttk.Progressbar(lf, mode='indeterminate')
+            self.progress.pack(fill='x')
+            self.log_text = tk.Text(lf, height=7, state='disabled', wrap='word')
+            self.log_text.pack(fill='x', pady=(4, 0))
+
             body = ttk.PanedWindow(self, orient='horizontal')
             body.pack(fill='both', expand=True, padx=6)
 
             left = ttk.Frame(body)
             body.add(left, weight=1)
+            self.browse_mode = tk.StringVar(value='simple')
+            modebar = ttk.Frame(left)
+            modebar.pack(fill='x', pady=(0, 3))
+            for mode, label in (('simple', 'Simple'), ('advanced', 'Advanced')):
+                tk.Radiobutton(modebar, text=label, value=mode, variable=self.browse_mode,
+                               indicatoron=False, command=self.set_browse_mode,
+                               padx=8, pady=1, borderwidth=1, relief='raised',
+                               offrelief='raised', overrelief='raised',
+                               selectcolor='#c8d8ee', font=('Segoe UI', 9)).pack(
+                    side='left', padx=(0, 4))
             self.filter_var = tk.StringVar()
             self.filter_var.trace_add('write', lambda *a: self.fill_tree())
             ttk.Entry(left, textvariable=self.filter_var).pack(fill='x')
-            ttk.Label(left, text='filter files (e.g. .nsbmd, barrel, .txt)', foreground='gray').pack(anchor='w')
+            self.filter_hint = tk.StringVar(
+                value='filter level names (e.g. uplink)')
+            ttk.Label(left, textvariable=self.filter_hint, foreground='gray').pack(anchor='w')
             tf = ttk.Frame(left)
             tf.pack(fill='both', expand=True)
-            self.tree = ttk.Treeview(tf, show='tree', selectmode='browse')
+            # Two rows shorter: the mode buttons above take that height, so the left
+            # column asks for no more room than before.
+            self.tree = ttk.Treeview(tf, show='tree', selectmode='browse', height=8)
             sb = ttk.Scrollbar(tf, command=self.tree.yview)
             self.tree.configure(yscrollcommand=sb.set)
             self.tree.pack(side='left', fill='both', expand=True)
@@ -957,14 +980,6 @@ if tk is not None:
             self.chr_tree.bind('<<TreeviewSelect>>', self.on_chr_select)
             self.chr_tree.bind('<Double-1>', lambda e: self.chr_entry.focus_set())
 
-            # ---- log
-            lf = ttk.Frame(self, padding=(6, 4))
-            lf.pack(fill='x')
-            self.progress = ttk.Progressbar(lf, mode='indeterminate')
-            self.progress.pack(fill='x')
-            self.log_text = tk.Text(lf, height=7, state='disabled', wrap='word')
-            self.log_text.pack(fill='x', pady=(4, 0))
-
         def report_callback_exception(self, exc, val, tb):
             msg = ''.join(traceback.format_exception(exc, val, tb))
             try:
@@ -1059,6 +1074,26 @@ if tk is not None:
             self.run_job(lambda: nds_repack.repack(rom, work, out, self.log))
 
         # ---------------------------------------------------------------- tree
+        def set_browse_mode(self):
+            """Simple = the level folder names; Advanced = the full file tree."""
+            simple = self.browse_mode.get() == 'simple'
+            self.filter_hint.set('filter level names (e.g. uplink)' if simple
+                                 else 'filter files (e.g. .nsbmd, barrel, .txt)')
+            self.fill_tree()
+
+        def _fill_level_list(self, root, flt):
+            """Simple mode: show only the folder names under <work folder>/Levels."""
+            lv = os.path.join(root, 'Levels')
+            if not os.path.isdir(lv):
+                self.info.set('No Levels folder in %s  -  switch to Advanced to browse the files.'
+                              % root)
+                return
+            names = sorted(d for d in os.listdir(lv) if os.path.isdir(os.path.join(lv, d)))
+            shown = [d for d in names if not flt or flt in d.lower()]
+            for d in shown:
+                self.tree.insert('', 'end', text=d)
+            self.info.set('%d level folder(s) in %s' % (len(shown), lv))
+
         def fill_tree(self):
             self.tree.delete(*self.tree.get_children())
             self.tree_paths = {}
@@ -1066,6 +1101,9 @@ if tk is not None:
             if not os.path.isdir(root):
                 return
             flt = self.filter_var.get().strip().lower()
+            if self.browse_mode.get() == 'simple':
+                self._fill_level_list(root, flt)
+                return
             dirs = {'': ''}
 
             def ensure(rel):
