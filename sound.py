@@ -300,6 +300,18 @@ class Sample:
         self.raw = raw                   # full sample block bytes
         self.data = data                 # bytes after the 12-byte header
         self.samples = samples           # decoded mono 16-bit list
+        # Loop start as a decoded-sample index (loopstart is a byte offset into
+        # `data`, which begins with the 4-byte ADPCM header).
+        if loop and samples:
+            if typ == 2:
+                li = (loopstart - 4) * 2
+            elif typ == 1:
+                li = loopstart // 2
+            else:
+                li = loopstart
+            self.loop_sample = max(0, min(li, len(samples) - 1))
+        else:
+            self.loop_sample = None
 
     @property
     def duration(self):
@@ -431,8 +443,13 @@ class SoundArchive:
         typ = d[wo]
         loopflag = d[wo + 1]
         rate = u16(d, wo + 2)
-        loopstart = u16(d, wo + 6) * 4
-        length = u32(d, wo + 8) * 4        # 4-byte units -> bytes
+        loop_units = u16(d, wo + 6)        # loop start, in 4-byte units
+        len_units = u32(d, wo + 8)         # loop LENGTH for looped samples!
+        # GBATEK: for looped samples the length field counts only the
+        # loop tail; the real data is (loopOffset + length) 4-byte units.
+        total_units = loop_units + len_units if loopflag else len_units
+        loopstart = loop_units * 4
+        length = total_units * 4           # bytes after the 12-byte header
         block = d[wo:wo + 12 + length]
         data = d[wo + 12:wo + 12 + length]
         if typ == 0:
@@ -710,7 +727,15 @@ class SoundArchive:
                 continue
             n = min(ndur, nout - i0)
             factor = 2.0 ** ((note - w.base_note) / 12.0) if hasattr(w, 'base_note') else 1.0
-            seg = resample(w.samples, max(1, int(w.rate * factor)), rate)[:n]
+            src_rate = max(1, int(w.rate * factor))
+            seg = resample(w.samples, src_rate, rate)
+            # A looped sample repeats its tail while a note is still held.
+            if len(seg) < n and w.loop_sample is not None and w.loop_sample < len(w.samples):
+                loop_body = resample(w.samples[w.loop_sample:], src_rate, rate)
+                if loop_body:
+                    reps = (n - len(seg) + len(loop_body) - 1) // len(loop_body)
+                    seg.extend(loop_body * min(reps, 100))
+            seg = seg[:n]
             if not seg:
                 continue
             seg = _envelope(seg, ndur, rate, w.envelope)
@@ -871,13 +896,12 @@ class SoundArchive:
         if not smp:
             raise SoundError('The WAV is empty.')
         header, body = encode_adpcm(smp)
-        # The length field counts the bytes AFTER the 12-byte sample header:
-        # the 4-byte ADPCM header plus the nibble data (padded to 4 bytes).
-        data_len = len(header) + len(body)
+        # With loop offset 1, the parser computes data bytes as 4 * (1 + length).
+        # We append the 4-byte ADPCM header plus `body`, so length = len(body)/4.
         loopflag = int(old.loop if loop is None else loop)
         # 12-byte sample block: type, loop, rate, time, loop offset, length
         sample = bytearray(struct.pack('<BBHHHI', 2, loopflag, old.rate,
-                                       (16757000 // old.rate) & 0xffff, 1, data_len // 4))
+                                       (16757000 // old.rate) & 0xffff, 1, len(body) // 4))
         sample += header + body
         # --- build the new SWAR (append the sample, point its offset at it)
         fid = arc['fid']
