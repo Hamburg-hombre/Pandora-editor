@@ -19,7 +19,8 @@ Workflow
   - .nsbmd = models, .nsbtx = shared textures, .cvhm = collision, .roo = room boxes (now editable),
     .lp = enemy/object placements and paths (now viewable and editable), .chr = the level name table
     (now editable), .txt and .lvl = text (now editable), .char/.plt/.ico = pictures and palettes, and
-    .crt/.nsbca/.nslbc/.tex = the Data tab (info + hex view/edit).
+    .crt/.nsbca/.nslbc/.tex = the Data tab (info + hex view/edit). Sounds\Sound_*.sdat and .sd hold
+    the music, sound effects and their name/index table (new Sounds tab).
   - Edit, then "Repack ROM..." writes a new .nds. The first edit of any file keeps a copy in
     <work folder>/_backup ; "Revert file to original" restores it.
 
@@ -210,3 +211,31 @@ Names (Names (.CHR) tab, CodeStrings.CHR)
   - Names are latin-1 text (letters, digits, punctuation and common accents); a NUL byte is not
     allowed. A backup is kept in _backup and "Revert file to original" restores the table.
     Repack the ROM to test a change.
+
+Sounds (Sounds tab, Sounds\Sound_*.sd and .sdat)
+  The game's audio lives in two files in the Sounds folder. Sound_*.sdat is a standard NITRO
+  sound archive: sequenced music (SSEQ), a table of sound effects (SSAR), the sound banks (SBNK)
+  that tie effects to samples, and wave archives (SWAR) with the actual samples (all IMA-ADPCM).
+  Sound_*.sd is the name table: each entry is { hash of the sound's name, sound index, 0xCCCC }.
+  The names themselves are in the .sdat, and the hash is the same java31 hash used in other files.
+  - Select either file in the list. Opening one automatically reads its companion, so you see both
+    the sounds and the hash table. The first page lists every named sound with its kind, sample,
+    rate and length; the second page ("IDs (.sd)") lists every hash/index entry.
+  - "Play" renders the selected sound to a temporary WAV and plays it with Windows sound; "Stop"
+    cuts it off. Sound effects play their sample exactly. Music is rendered by a simple SSEQ
+    player: it understands notes, rests, tempo, program/volume/pan changes and loops, but it is an
+    approximation, not the game's own mixer. On other systems use Export WAV to listen elsewhere.
+  - "Export WAV..." saves the selected sound (up to 2 minutes); "Export all WAVs..." writes one WAV
+    per sound into a folder (up to 30 seconds each). Useful for finding a sound by ear.
+  - "Replace with WAV..." re-encodes your WAV as IMA-ADPCM at the game's sample rate and puts it in
+    that sound's sample slot. The WAV may have any rate/channels; it is downmixed to mono and
+    resampled so the pitch stays the same. The .sdat grows and the other samples are left in place.
+    Pick a short WAV: the game's samples are small. A backup is kept in _backup.
+  - "Rename..." changes a name in the .sdat's SYMB block and updates its hash in the .sd. The new
+    name must be the same length or shorter, because the strings are stored one after another and a
+    longer name would push the later ones (and all their offsets) along.
+  - On the "IDs (.sd)" page, pick an entry and edit its hash (hex) and index, then "Apply and
+    save". Changing the index redirects that sound to another one of the same kind (e.g. make a
+    weapon use a different effect); changing the hash changes which name the game looks up.
+  - "Revert file to original" restores both the .sd and the .sdat from _backup. Repack the ROM to
+    test a change in an emulator.

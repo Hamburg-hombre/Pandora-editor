@@ -56,6 +56,7 @@ try:
     import nds_unpack, nds_repack, export_models, collision
     import objects_lp as lpmod
     import extra_files
+    import sound as soundmod
 except Exception as _e:
     _fatal('Could not load the tool files (%s: %s).\nKeep ALL the .py files from the zip in the same folder.'
            % (type(_e).__name__, _e))
@@ -470,6 +471,15 @@ if tk is not None:
             self.chr_index = None
             self.chr_dirty = False
             self.chr_loading = False
+            # .sd / .sdat sound archives
+            self.sound_table = None          # SoundTable (.sd)
+            self.sound_archive = None        # SoundArchive (.sdat)
+            self.sound_sels = {}             # tree row id -> SdatSound
+            self.sound_sel = None
+            self.sound_filter = tk.StringVar()
+            self.sound_table_sels = {}       # tree row id -> .sd entry index
+            self.sound_paths = {}
+            self._sound_temp_wav = None
             self._build()
             self.after(100, self._poll)
 
@@ -980,6 +990,147 @@ if tk is not None:
             self.chr_tree.bind('<<TreeviewSelect>>', self.on_chr_select)
             self.chr_tree.bind('<Double-1>', lambda e: self.chr_entry.focus_set())
 
+            # ---- sounds tab (.sd / .sdat)
+            st = ttk.Frame(self.nb)
+            self.nb.add(st, text='Sounds')
+            self.sound_nb = ttk.Notebook(st)
+            self.sound_nb.pack(fill='both', expand=True)
+
+            # page 1: the named sounds in a .sdat
+            sp = ttk.Frame(self.sound_nb, padding=2)
+            self.sound_nb.add(sp, text='Sounds (.sdat)')
+            sbar = ttk.Frame(sp)
+            sbar.pack(fill='x')
+            self.sound_label = tk.StringVar(value=(
+                'Open Sounds\\Sound_All.sdat (or its .sd) in the list on the left.'))
+            ttk.Label(sbar, textvariable=self.sound_label).pack(side='left')
+            self.btn_sound_reload = ttk.Button(sbar, text='Reload', width=7,
+                                               command=self.reload_sounds)
+            self.btn_sound_reload.pack(side='right')
+            self.btn_sound_export_all = ttk.Button(sbar, text='Export all WAVs…',
+                                                   command=self.export_all_sounds,
+                                                   state='disabled')
+            self.btn_sound_export_all.pack(side='right', padx=4)
+            self.btn_sound_export = ttk.Button(sbar, text='Export WAV…',
+                                               command=self.export_sound_wav,
+                                               state='disabled')
+            self.btn_sound_export.pack(side='right')
+            self.btn_sound_rename = ttk.Button(sbar, text='Rename…',
+                                               command=self.rename_sound,
+                                               state='disabled')
+            self.btn_sound_rename.pack(side='right', padx=4)
+            self.btn_sound_replace = ttk.Button(sbar, text='Replace with WAV…',
+                                                command=self.replace_sound_wav,
+                                                state='disabled')
+            self.btn_sound_replace.pack(side='right')
+            self.btn_sound_stop = ttk.Button(sbar, text='Stop', width=6,
+                                             command=self.stop_sound, state='disabled')
+            self.btn_sound_stop.pack(side='right', padx=4)
+            self.btn_sound_play = ttk.Button(sbar, text='Play', width=6,
+                                             command=self.play_sound, state='disabled')
+            self.btn_sound_play.pack(side='right')
+
+            filt = ttk.Frame(sp)
+            filt.pack(fill='x', pady=(3, 2))
+            ttk.Label(filt, text='filter:').pack(side='left')
+            self.sound_filter.trace_add('write', lambda *a: self.fill_sound_list())
+            ttk.Entry(filt, textvariable=self.sound_filter).pack(side='left', fill='x',
+                                                                 expand=True, padx=4)
+
+            spw = ttk.PanedWindow(sp, orient='horizontal')
+            spw.pack(fill='both', expand=True)
+            sl = ttk.Frame(spw)
+            spw.add(sl, weight=2)
+            cols = ('name', 'kind', 'sample', 'rate', 'length')
+            heads = ('sound name', 'kind', 'sample', 'Hz', 'seconds')
+            widths = (245, 65, 70, 60, 70)
+            self.sound_tree = ttk.Treeview(sl, columns=cols, show='headings',
+                                           selectmode='browse', height=11)
+            for c, hd, wd in zip(cols, heads, widths):
+                self.sound_tree.heading(c, text=hd)
+                self.sound_tree.column(c, width=wd, stretch=(c == 'name'),
+                                       anchor='w' if c == 'name' else 'center')
+            ssl = ttk.Scrollbar(sl, command=self.sound_tree.yview)
+            self.sound_tree.configure(yscrollcommand=ssl.set)
+            self.sound_tree.pack(side='left', fill='both', expand=True)
+            ssl.pack(side='right', fill='y')
+            self.sound_tree.bind('<<TreeviewSelect>>', self.on_sound_select)
+            self.sound_tree.bind('<Double-1>', lambda e: self.play_sound())
+
+            sr = ttk.Frame(spw)
+            spw.add(sr, weight=3)
+            ttk.Label(sr, text='Sound information', font=('Segoe UI', 9, 'bold')).pack(fill='x')
+            inf = ttk.Frame(sr)
+            inf.pack(fill='both', expand=True)
+            self.sound_info = tk.Text(inf, height=9, wrap='word', state='disabled',
+                                      font=('Consolas', 9), background='#ffffff',
+                                      foreground='#000000', relief='solid', borderwidth=1)
+            isb = ttk.Scrollbar(inf, command=self.sound_info.yview)
+            self.sound_info.configure(yscrollcommand=isb.set)
+            isb.pack(side='right', fill='y')
+            self.sound_info.pack(side='left', fill='both', expand=True)
+            ttk.Label(sr, text='Waveform', font=('Segoe UI', 9, 'bold')).pack(fill='x',
+                                                                               pady=(5, 0))
+            self.sound_wave = tk.Canvas(sr, height=90, background='#202428',
+                                        highlightthickness=1, highlightbackground='#7a7a7a')
+            self.sound_wave.pack(fill='x')
+            self.sound_wave.bind('<Configure>', lambda e: self._draw_sound_wave())
+            ttk.Label(sr, foreground='#606060', text=(
+                'Play writes a temporary WAV and uses Windows sound. Music is rendered by a '
+                'simple SSEQ player, so it is an approximation. A backup is kept before edits.'),
+                wraplength=520, justify='left').pack(fill='x', pady=(4, 0))
+
+            # page 2: the hash/index table in the .sd
+            sdp = ttk.Frame(self.sound_nb, padding=2)
+            self.sound_nb.add(sdp, text='IDs (.sd)')
+            sdbar = ttk.Frame(sdp)
+            sdbar.pack(fill='x')
+            self.sd_label = tk.StringVar(value='Open a .sd file to see its hash/index table.')
+            ttk.Label(sdbar, textvariable=self.sd_label).pack(side='left')
+            self.btn_sd_reload = ttk.Button(sdbar, text='Reload', width=7,
+                                            command=self.reload_sounds)
+            self.btn_sd_reload.pack(side='right')
+            sdbox = ttk.Frame(sdp)
+            sdbox.pack(fill='both', expand=True, pady=(4, 0))
+            self.sd_tree = ttk.Treeview(sdbox, columns=('idx', 'hash', 'name', 'type', 'sid'),
+                                        show='headings', selectmode='browse', height=12)
+            for c, hd, wd in zip(('idx', 'hash', 'name', 'type', 'sid'),
+                                 ('#', 'name hash', 'sound name', 'kind', 'index'),
+                                 (45, 120, 300, 80, 60)):
+                self.sd_tree.heading(c, text=hd)
+                self.sd_tree.column(c, width=wd,
+                                    stretch=(c == 'name'),
+                                    anchor='w' if c == 'name' else 'center')
+            sdsb = ttk.Scrollbar(sdbox, command=self.sd_tree.yview)
+            self.sd_tree.configure(yscrollcommand=sdsb.set)
+            self.sd_tree.pack(side='left', fill='both', expand=True)
+            sdsb.pack(side='right', fill='y')
+            self.sd_tree.bind('<<TreeviewSelect>>', self.on_sd_select)
+            sef = ttk.LabelFrame(sdp, text=' Selected .sd entry ', padding=6)
+            sef.pack(side='bottom', fill='x', pady=(6, 0))
+            ttk.Label(sef, text='Index').grid(row=0, column=0, sticky='e')
+            self.sd_idx_var = tk.StringVar(value='—')
+            ttk.Label(sef, textvariable=self.sd_idx_var, width=6).grid(row=0, column=1, sticky='w')
+            ttk.Label(sef, text='Name').grid(row=0, column=2, sticky='e')
+            self.sd_name_var = tk.StringVar()
+            ttk.Label(sef, textvariable=self.sd_name_var, width=30, anchor='w').grid(
+                row=0, column=3, sticky='w', padx=4)
+            ttk.Label(sef, text='Hash (hex)').grid(row=0, column=4, sticky='e')
+            self.sd_hash_var = tk.StringVar()
+            ttk.Entry(sef, textvariable=self.sd_hash_var, width=12).grid(
+                row=0, column=5, padx=4)
+            ttk.Label(sef, text='Index used by game').grid(row=0, column=6, sticky='e')
+            self.sd_id_var = tk.StringVar()
+            ttk.Entry(sef, textvariable=self.sd_id_var, width=7).grid(row=0, column=7, padx=4)
+            self.btn_sd_apply = ttk.Button(sef, text='Apply and save',
+                                           command=self.apply_sd_entry, state='disabled')
+            self.btn_sd_apply.grid(row=0, column=8, padx=(8, 0))
+            ttk.Label(sef, foreground='#606060', text=(
+                'Changing the index redirects that sound to another one of the same kind. '
+                'Changing the hash changes which name the game looks up. A backup is kept.'),
+                wraplength=820, justify='left').grid(row=1, column=0, columnspan=9,
+                                                     sticky='w', pady=(4, 0))
+
         def report_callback_exception(self, exc, val, tb):
             msg = ''.join(traceback.format_exception(exc, val, tb))
             try:
@@ -1190,8 +1341,13 @@ if tk is not None:
             self._set_text('', False)
             self._clear_data()
             self._clear_chr()
+            self.stop_sound()
+            self._clear_sounds()
             self.btn_revert.configure(state='normal' if self._has_backup(path) else 'disabled')
             name = os.path.basename(path)
+            if soundmod.is_sound_file(path):
+                self.load_sounds(path)
+                return
             if low.endswith(('.txt', '.lvl')):
                 try:
                     txt, info = read_text_doc(path)
@@ -1344,6 +1500,365 @@ if tk is not None:
                     'Reload', 'Discard the unsaved changes to %s?' % os.path.basename(self.text_path)):
                 return
             self.load_path(self.text_path)
+
+        # ------------------------------------------------------- sounds (.sd / .sdat)
+        def _clear_sounds(self):
+            self.sound_table = None
+            self.sound_archive = None
+            self.sound_sels = {}
+            self.sound_sel = None
+            self.sound_paths = {}
+            self.sound_table_sels = {}
+            self.sd_row_by_index = {}
+            self._sound_wave_samples = None
+            self.sound_tree.delete(*self.sound_tree.get_children())
+            self.sd_tree.delete(*self.sd_tree.get_children())
+            self._set_readonly_text(self.sound_info, '')
+            self.sound_wave.delete('all')
+            self.sound_label.set('Open Sounds\\Sound_All.sdat (or its .sd) in the list on the left.')
+            self.sd_label.set('Open a .sd file to see its hash/index table.')
+            self.sd_idx_var.set('—')
+            self.sd_name_var.set('')
+            self.sd_hash_var.set('')
+            self.sd_id_var.set('')
+            for b in (self.btn_sound_play, self.btn_sound_stop, self.btn_sound_export,
+                      self.btn_sound_export_all, self.btn_sound_replace,
+                      self.btn_sound_rename, self.btn_sd_apply):
+                b.configure(state='disabled')
+
+        def load_sounds(self, path):
+            name = os.path.basename(path)
+            try:
+                table, arch = soundmod.open_sound(path)
+            except Exception as e:
+                self.info.set('%s: could not read sound file (%s)' % (name, e))
+                return
+            self.sound_table, self.sound_archive = table, arch
+            self.sound_paths = {'sd': table.path if table else None,
+                                'sdat': arch.path if arch else None}
+            parts = []
+            if arch:
+                parts.append('%d sounds (%d music, %d effects, %d samples)' %
+                             (len(arch.sounds),
+                              len([s for s in arch.sounds if s.kind == 'music']),
+                              len([s for s in arch.sounds if s.kind == 'sfx']),
+                              sum(len(a['samples']) for a in arch.swar)))
+            if table:
+                parts.append('%d name ids' % table.count)
+            self.info.set('%s  -  %s' % (name, ', '.join(parts)))
+            self.sound_label.set('%s  -  %s' % (name, ', '.join(parts)))
+            self.sd_label.set('%s  -  %s' % (
+                os.path.basename(table.path) if table else name,
+                'name hash -> index table' if table else 'no .sd table found'))
+            self._set_readonly_text(self.sound_info, arch.describe() if arch else
+                                    (table.describe() if table else ''))
+            self.fill_sound_list()
+            self.fill_sd_table()
+            self.sound_filter.set('')
+            rows = self.sound_tree.get_children()
+            if rows:
+                self.sound_tree.selection_set(rows[0])
+                self.on_sound_select()
+                self.sound_nb.select(0)
+            elif self.sound_table:
+                srows = self.sd_tree.get_children()
+                if srows:
+                    self.sd_tree.selection_set(srows[0])
+                    self.on_sd_select()
+                self.sound_nb.select(1)
+            self.nb.select(7)
+
+        def reload_sounds(self):
+            if self.cur_path and soundmod.is_sound_file(self.cur_path):
+                self.load_path(self.cur_path)
+
+        def fill_sound_list(self):
+            tree = self.sound_tree
+            tree.delete(*tree.get_children())
+            self.sound_sels = {}
+            arch = self.sound_archive
+            if not arch:
+                return
+            flt = self.sound_filter.get().strip().lower()
+            for s in arch.sounds:
+                if flt and flt not in s.name.lower():
+                    continue
+                w = s.sample
+                sample = ('%s #%d' % (w.type_name().split()[0], w.index)) if w else '—'
+                rate = str(w.rate) if w else '—'
+                dur = '%.2f' % w.duration if w else '—'
+                iid = tree.insert('', 'end', values=(
+                    s.name, 'music' if s.kind == 'music' else 'effect', sample, rate, dur))
+                self.sound_sels[iid] = s
+
+        def fill_sd_table(self):
+            tree = self.sd_tree
+            tree.delete(*tree.get_children())
+            self.sound_table_sels = {}
+            self.sd_row_by_index = {}
+            table = self.sound_table
+            if not table:
+                return
+            names = {}
+            arch = self.sound_archive
+            if arch:
+                for s in arch.sounds:
+                    names[soundmod.java31(s.name)] = (s.name, 'music' if s.kind == 'music' else 'effect')
+                for nm in arch.all_names:
+                    names.setdefault(soundmod.java31(nm), (nm, 'name'))
+                    names.setdefault(soundmod.java31(nm.upper()), (nm, 'name'))
+            for e in table.entries:
+                nm, kind = names.get(e['hash'], ('?', '—'))
+                iid = tree.insert('', 'end', values=(
+                    e['index'], '%08X' % e['hash'], nm, kind, e['id']))
+                self.sound_table_sels[iid] = e['index']
+                self.sd_row_by_index[e['index']] = iid
+
+        def on_sound_select(self, _e=None):
+            sel = self.sound_tree.selection()
+            s = self.sound_sels.get(sel[0]) if sel else None
+            self.sound_sel = s
+            if not s:
+                self._set_readonly_text(self.sound_info, self.sound_archive.describe()
+                                        if self.sound_archive else '')
+                self._sound_wave_samples = None
+                self.sound_wave.delete('all')
+                return
+            self._set_readonly_text(self.sound_info, self.sound_archive.describe_sound(s))
+            for b in (self.btn_sound_play, self.btn_sound_export, self.btn_sound_export_all):
+                b.configure(state='normal')
+            self.btn_sound_replace.configure(state='normal' if s.sample else 'disabled')
+            self.btn_sound_rename.configure(state='normal')
+            self._sound_wave_samples = s.sample.samples if s.sample else None
+            self._draw_sound_wave()
+            if self.sound_table:
+                e = soundmod.sd_entry_for_name(self.sound_table, s.name)
+                row = self.sd_row_by_index.get(e['index']) if e else None
+                if row:
+                    self.sd_tree.selection_set(row)
+                    self.sd_tree.see(row)
+
+        def on_sd_select(self, _e=None):
+            sel = self.sd_tree.selection()
+            idx = self.sound_table_sels.get(sel[0]) if sel else None
+            if idx is None or not self.sound_table:
+                return
+            e = self.sound_table.entries[idx]
+            vals = self.sd_tree.item(sel[0], 'values')
+            self.sd_idx_var.set(str(idx))
+            self.sd_name_var.set(vals[2] if len(vals) > 2 else '')
+            self.sd_hash_var.set('%08X' % e['hash'])
+            self.sd_id_var.set(str(e['id']))
+            self.btn_sd_apply.configure(state='normal')
+
+        def apply_sd_entry(self):
+            sel = self.sd_tree.selection()
+            idx = self.sound_table_sels.get(sel[0]) if sel else None
+            if idx is None or not self.sound_table:
+                return
+            txt = self.sd_hash_var.get().strip().lower()
+            if txt.startswith('0x'):
+                txt = txt[2:]
+            try:
+                h = int(txt, 16)
+                sid = int(self.sd_id_var.get().strip(), 0)
+            except ValueError:
+                return messagebox.showerror('Save .sd', 'The hash must be hexadecimal and the '
+                                            'index a number.')
+            if not 0 <= h <= 0xffffffff or not 0 <= sid <= 0xffff:
+                return messagebox.showerror('Save .sd', 'The hash or index is out of range.')
+            try:
+                new = self.sound_table.set_field(idx, hash_value=h, sid=sid)
+            except Exception as e:
+                return messagebox.showerror('Save .sd', str(e))
+            path = self.sound_table.path
+            try:
+                backup_file(self.work_var.get().strip(), path)
+                with open(path, 'wb') as f:
+                    f.write(new)
+            except Exception as e:
+                return messagebox.showerror('Save .sd', 'Could not write the file:\n%s' % e)
+            self.log('updated .sd entry %d (hash 0x%08X, index %d)' % (idx, h, sid))
+            self.load_path(path)
+
+        def _draw_sound_wave(self):
+            c = self.sound_wave
+            c.delete('all')
+            w = max(1, c.winfo_width())
+            h = max(1, c.winfo_height())
+            smp = getattr(self, '_sound_wave_samples', None)
+            if not smp:
+                c.create_text(w // 2, h // 2, anchor='center', fill='#9aa0a6',
+                              text='No raw sample (sequenced music) - press Play to render',
+                              font=('Segoe UI', 9))
+                return
+            step = max(1, len(smp) // max(1, w))
+            mid = h / 2.0
+            for x in range(0, max(1, w)):
+                lo = x * step
+                hi = min(len(smp), lo + step)
+                if lo >= hi:
+                    break
+                chunk = smp[lo:hi]
+                a = min(chunk) / 32768.0 * (h / 2 - 4)
+                b = max(chunk) / 32768.0 * (h / 2 - 4)
+                c.create_line(x, mid - b, x, mid - a, fill='#6cc644')
+
+        def _temp_wav(self, samples, rate):
+            import tempfile
+            path = os.path.join(tempfile.gettempdir(), 'pandora_sound_%d.wav' % os.getpid())
+            soundmod.write_wav(path, samples, rate)
+            self._sound_temp_wav = path
+            return path
+
+        def play_sound(self):
+            s = self.sound_sel
+            if not s or not self.sound_archive:
+                return
+            self.log('rendering %s ...' % s.name)
+            self.update_idletasks()
+            try:
+                smp, rate = self.sound_archive.render(s, max_seconds=20)
+            except Exception as e:
+                return messagebox.showerror('Play', str(e))
+            if not smp:
+                return messagebox.showerror('Play', 'This sound produced no audio.')
+            self._sound_wave_samples = smp
+            self._draw_sound_wave()
+            path = self._temp_wav(smp, rate)
+            try:
+                import winsound
+                winsound.PlaySound(None, winsound.SND_PURGE)
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                self.btn_sound_stop.configure(state='normal')
+                self.log('playing %s (%.2f s at %d Hz)' % (s.name, len(smp) / float(rate), rate))
+            except Exception as e:
+                self.log('playback unavailable (%s); use Export WAV' % e)
+                messagebox.showinfo('Play', 'Audio playback is not available here (%s).\n'
+                                    'Use "Export WAV" and open the file in another player.' % e)
+
+        def stop_sound(self):
+            try:
+                import winsound
+                winsound.PlaySound(None, winsound.SND_PURGE)
+            except Exception:
+                pass
+            try:
+                self.btn_sound_stop.configure(state='disabled')
+            except Exception:
+                pass
+
+        def _sound_file_name(self, s):
+            return ''.join(ch if (ch.isalnum() or ch in '_-') else '_' for ch in s.name)
+
+        def export_sound_wav(self):
+            s = self.sound_sel
+            if not s or not self.sound_archive:
+                return
+            p = filedialog.asksaveasfilename(
+                title='Export %s as WAV' % s.name, defaultextension='.wav',
+                initialfile=self._sound_file_name(s) + '.wav',
+                filetypes=[('WAV audio', '*.wav'), ('All files', '*.*')])
+            if not p:
+                return
+            try:
+                smp, rate = self.sound_archive.render(s, max_seconds=120)
+                soundmod.write_wav(p, smp, rate)
+                self.log('exported %s -> %s (%.2f s)' % (s.name, p, len(smp) / float(rate)))
+            except Exception as e:
+                messagebox.showerror('Export WAV', str(e))
+
+        def export_all_sounds(self):
+            arch = self.sound_archive
+            if not arch:
+                return
+            folder = filedialog.askdirectory(title='Export all sounds as WAV')
+            if not folder:
+                return
+
+            def job():
+                n = 0
+                for s in arch.sounds:
+                    smp, rate = arch.render(s, max_seconds=30)
+                    if smp:
+                        soundmod.write_wav(os.path.join(folder, self._sound_file_name(s) + '.wav'),
+                                           smp, rate)
+                        n += 1
+                self.log('exported %d WAV file(s) to %s' % (n, folder))
+
+            self.run_job(job)
+
+        def replace_sound_wav(self):
+            s = self.sound_sel
+            path = self.sound_paths.get('sdat')
+            if not s or not s.sample or not path:
+                return messagebox.showinfo('Replace sound', 'Select a sound that has a raw sample.')
+            p = filedialog.askopenfilename(
+                title='WAV to replace %s' % s.name,
+                filetypes=[('WAV audio', '*.wav'), ('All files', '*.*')])
+            if not p:
+                return
+            if not messagebox.askyesno(
+                    'Replace sound',
+                    'Replace the sample of "%s" with:\n%s\n\n'
+                    'The WAV is resampled to the game rate and encoded to IMA-ADPCM. '
+                    'The .sdat grows; a backup is kept in _backup.'
+                    % (s.name, p)):
+                return
+            work = self.work_var.get().strip()
+            arc, si = s.sample.archive, s.sample.index
+
+            def job():
+                new = self.sound_archive.replace_sample(arc, si, p)
+                oldsize = os.path.getsize(path)
+                backup_file(work, path)
+                with open(path, 'wb') as f:
+                    f.write(new)
+                self.log('replaced sample for %s with %s (%s -> %s bytes)' %
+                         (s.name, os.path.basename(p), format(oldsize, ','),
+                          format(len(new), ',')))
+
+            self.run_job(job, after=lambda: self.load_path(path))
+
+        def rename_sound(self):
+            s = self.sound_sel
+            if not s:
+                return
+            new = simpledialog.askstring(
+                'Rename sound',
+                'New name for "%s" (latin-1, same or fewer characters):' % s.name,
+                initialvalue=s.name)
+            if not new or new == s.name:
+                return
+            try:
+                sdat_new, h_old, h_new = self.sound_archive.rename(s.name, new)
+            except Exception as e:
+                return messagebox.showerror('Rename sound', str(e))
+            sd_path = self.sound_paths.get('sd')
+            sd_new = None
+            if self.sound_table:
+                e = soundmod.sd_entry_for_name(self.sound_table, s.name)
+                if e:
+                    # Effects are hashed from the upper-case name.
+                    old_upper = soundmod.java31(s.name.upper()) == e['hash'] and \
+                        soundmod.java31(s.name) != e['hash']
+                    h = soundmod.java31(new.upper()) if old_upper else h_new
+                    sd_new = self.sound_table.set_field(e['index'], hash_value=h)
+            work = self.work_var.get().strip()
+            sdat_path = self.sound_paths['sdat']
+            try:
+                if sd_new is not None:
+                    backup_file(work, sd_path)
+                    with open(sd_path, 'wb') as f:
+                        f.write(sd_new)
+                if sdat_new is not None:
+                    backup_file(work, sdat_path)
+                    with open(sdat_path, 'wb') as f:
+                        f.write(sdat_new)
+            except Exception as e:
+                return messagebox.showerror('Rename sound', 'Could not save:\n%s' % e)
+            self.log('renamed %s -> %s' % (s.name, new))
+            self.load_path(sdat_path or sd_path)
 
         # ------------------------------------------------------- data files view
         def _set_readonly_text(self, widget, text):
@@ -2957,7 +3472,14 @@ if tk is not None:
                 targets.append(L.tex_path)
             if self.data and self.data.import_kind == 'char' and self.data.companion:
                 targets.append(self.data.companion)
-            targets = [p for p in targets if p and os.path.exists(backup_path(work, p))]
+            if self.sound_paths:
+                for p in (self.sound_paths.get('sd'), self.sound_paths.get('sdat')):
+                    if p:
+                        targets.append(p)
+            seen = set()
+            targets = [p for p in targets
+                       if p and p not in seen and not seen.add(p) and
+                       os.path.exists(backup_path(work, p))]
             if not targets:
                 return
             if not messagebox.askyesno('Revert', 'Restore the original version of:\n%s\n\nYour changes to these files '
