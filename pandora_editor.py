@@ -1828,7 +1828,7 @@ if tk is not None:
                 return
             new = simpledialog.askstring(
                 'Rename sound',
-                'New name for "%s" (latin-1, same or fewer characters):' % s.name,
+                'New name for "%s" (latin-1, any length):' % s.name,
                 initialvalue=s.name)
             if not new or new == s.name:
                 return

@@ -232,8 +232,8 @@ Sounds (Sounds tab, Sounds\Sound_*.sd and .sdat)
     resampled so the pitch stays the same. The .sdat grows and the other samples are left in place.
     Pick a short WAV: the game's samples are small. A backup is kept in _backup.
   - "Rename..." changes a name in the .sdat's SYMB block and updates its hash in the .sd. The new
-    name must be the same length or shorter, because the strings are stored one after another and a
-    longer name would push the later ones (and all their offsets) along.
+    name may be any length: the old string is left in place as unused bytes and the new one is
+    appended to the name table, with all offsets (and the FAT) rewritten. A backup is kept.
   - On the "IDs (.sd)" page, pick an entry and edit its hash (hex) and index, then "Apply and
     save". Changing the index redirects that sound to another one of the same kind (e.g. make a
     weapon use a different effect); changing the hash changes which name the game looks up.

@@ -985,30 +985,77 @@ class SoundArchive:
                         out[nm] = b + so
         return out
 
+    def _name_slots(self, rel_off):
+        """Absolute addresses of the u32 SYMB slots that point at rel_off."""
+        b = self.blocks['SYMB'][0]
+        d = self.raw
+        slots = []
+        labels = ('SSEQ', 'SSAR', 'BANK', 'SWAR', 'PLAYER', 'GROUP', 'PLAYER2', 'STRM')
+        for i, lab in enumerate(labels):
+            ro = self.symb_off[i]
+            if not ro:
+                continue
+            p = b + ro
+            cnt = u32(d, p)
+            if lab == 'SSAR':
+                for j in range(cnt):
+                    fo_slot = p + 4 + j * 8
+                    if u32(d, fo_slot) == rel_off:
+                        slots.append(fo_slot)
+                    lo = u32(d, fo_slot + 4)
+                    lp = b + lo
+                    for k in range(u32(d, lp)):
+                        so_slot = lp + 4 + k * 4
+                        if u32(d, so_slot) == rel_off:
+                            slots.append(so_slot)
+            else:
+                for j in range(cnt):
+                    so_slot = p + 4 + j * 4
+                    if u32(d, so_slot) == rel_off:
+                        slots.append(so_slot)
+        return slots
+
     def rename(self, old_name, new_name):
         """Return (new_sdat, hash_old, hash_new).
 
-        The new name must be ASCII/latin-1 and no longer than the old one: the
-        string is overwritten in place so every offset stays valid.
+        The new string is appended at the end of the SYMB block and every
+        reference to the old string is repointed there. The SDAT is then
+        rebuilt with shifted INFO/FAT/FILE offsets, so names may be any length.
         """
         try:
-            new_name.encode('latin-1')
+            blob = new_name.encode('latin-1') + b'\x00'
         except UnicodeEncodeError:
             raise SoundError('Sound names must be latin-1 text.')
-        if '\x00' in new_name:
-            raise SoundError('A name cannot contain a NUL character.')
-        b = self.blocks['SYMB'][0]
+        if not new_name or '\x00' in new_name:
+            raise SoundError('A name must be non-empty and cannot contain a NUL character.')
+        b, size = self.blocks['SYMB']
         abs_off = self.name_offsets().get(old_name)
         if abs_off is None:
             raise SoundError('The name %r is not in the SYMB block.' % old_name)
-        old_len = len(old_name.encode('latin-1'))
-        if len(new_name.encode('latin-1')) > old_len:
-            raise SoundError('The new name is longer than %r (%d characters); it would move '
-                             'later strings. Use a name of the same or shorter length.'
-                             % (old_name, old_len))
-        out = bytearray(self.raw)
-        blob = new_name.encode('latin-1') + b'\x00' * (old_len - len(new_name))
-        out[abs_off:abs_off + old_len] = blob
+        rel_old = abs_off - b
+        slots = self._name_slots(rel_old)
+        if not slots:
+            raise SoundError('No reference to %r was found in the SYMB lists.' % old_name)
+
+        # Append the new string just past the current SYMB block (with padding).
+        insert_at = b + size
+        new_rel = insert_at - b
+        pad = (-len(blob)) % 4
+        delta = len(blob) + pad
+        out = bytearray(self.raw[:insert_at]) + blob + (b'\x00' * pad) + bytearray(self.raw[insert_at:])
+
+        for slot in slots:
+            struct.pack_into('<I', out, slot, new_rel)
+        # SYMB sizes: internal size is 4-aligned, the header size is the exact one.
+        struct.pack_into('<I', out, b + 4, size + delta)
+        struct.pack_into('<I', out, 0x14, u32(self.raw, 0x14) + delta)
+        # INFO / FAT / FILE all move after the inserted bytes.
+        for off in (0x18, 0x20, 0x28, 0x08):
+            struct.pack_into('<I', out, off, u32(self.raw, off) + delta)
+        fat_off = u32(out, 0x20)
+        for i in range(len(self.fat)):
+            fo = fat_off + 12 + i * 16
+            struct.pack_into('<I', out, fo, u32(out, fo) + delta)
         return bytes(out), java31(old_name), java31(new_name)
 
 
