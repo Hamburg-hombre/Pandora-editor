@@ -298,6 +298,37 @@ def open_folder(path):
 
 # ============================================================================ GUI
 if tk is not None:
+    RELOAD_ICON = '\u21bb'      # clockwise open-circle arrow, like a browser reload button
+
+    class ToolTip:
+        """Tiny hover tooltip, so icon-only buttons still say what they do."""
+        def __init__(self, widget, text):
+            self.widget, self.text, self.tip = widget, text, None
+            widget.bind('<Enter>', self._show, add='+')
+            widget.bind('<Leave>', self._hide, add='+')
+            widget.bind('<ButtonPress>', self._hide, add='+')
+
+        def _show(self, _e=None):
+            if self.tip or not self.text:
+                return
+            x = self.widget.winfo_rootx() + 4
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+            self.tip = tk.Toplevel(self.widget)
+            self.tip.wm_overrideredirect(True)
+            self.tip.wm_geometry('+%d+%d' % (x, y))
+            tk.Label(self.tip, text=self.text, background='#ffffe0', relief='solid',
+                     borderwidth=1, padx=4, pady=1).pack()
+
+        def _hide(self, _e=None):
+            if self.tip:
+                self.tip.destroy()
+                self.tip = None
+
+    def reload_button(parent, command, tip='Reload from disk'):
+        b = ttk.Button(parent, text=RELOAD_ICON, width=3, command=command)
+        ToolTip(b, tip)
+        return b
+
     class MapDialog(tk.Toplevel):
         """Ask which of the model's materials each OBJ material group should use."""
         MAXROWS = 12
@@ -619,7 +650,7 @@ if tk is not None:
             ttk.Label(xtb, textvariable=self.text_label).pack(side='left')
             self.btn_text_save = ttk.Button(xtb, text='Save text', command=self.save_text, state='disabled')
             self.btn_text_save.pack(side='right')
-            ttk.Button(xtb, text='Reload', command=self.reload_text).pack(side='right', padx=4)
+            reload_button(xtb, self.reload_text).pack(side='right', padx=4)
             txtf = ttk.Frame(xt)
             txtf.pack(fill='both', expand=True)
             self.text = tk.Text(txtf, wrap='word', font=('Courier', 11), undo=True)
@@ -839,7 +870,7 @@ if tk is not None:
             self.data_label = tk.StringVar(value=(
                 'Open a .char, .plt, .ico, .crt, .nsbca, .nslbc or .tex file in the list on the left.'))
             ttk.Label(dbar, textvariable=self.data_label).pack(side='left')
-            self.btn_data_reload = ttk.Button(dbar, text='Reload', command=self.reload_data)
+            self.btn_data_reload = reload_button(dbar, self.reload_data)
             self.btn_data_reload.pack(side='right')
             self.btn_data_png = ttk.Button(dbar, text='Save PNG…', command=self.save_data_png,
                                            state='disabled')
@@ -881,7 +912,7 @@ if tk is not None:
                 row=0, column=4, padx=(8, 0))
             ttk.Label(pfb, foreground='#606060', text=(
                 'Example: offset 200, bytes 00 FF 7A. The bytes are written into the file; '
-                'Reload re-reads it. The hex view below is read-only.'), wraplength=780,
+                'The reload button (\u21bb) re-reads it. The hex view below is read-only.'), wraplength=780,
                 justify='left').grid(row=1, column=0, columnspan=5, sticky='w', pady=(3, 0))
             pfb.columnconfigure(3, weight=1)
 
@@ -944,7 +975,7 @@ if tk is not None:
             self.chr_label = tk.StringVar(value=(
                 'Open a level\'s CodeStrings.CHR in the list on the left to see and edit its names.'))
             ttk.Label(cbar, textvariable=self.chr_label).pack(side='left')
-            self.btn_chr_reload = ttk.Button(cbar, text='Reload', command=self.reload_chr)
+            self.btn_chr_reload = reload_button(cbar, self.reload_chr)
             self.btn_chr_reload.pack(side='right')
             self.btn_chr_add = ttk.Button(cbar, text='Add name…', command=self.add_chr_name,
                                           state='disabled')
@@ -976,7 +1007,7 @@ if tk is not None:
             cf.pack(fill='both', expand=True, pady=(4, 0))
             cols = ('idx', 'offset', 'length', 'used', 'name')
             heads = ('#', 'offset', 'bytes', 'used by', 'name')
-            widths = (52, 80, 60, 66, 470)
+            widths = (46, 72, 52, 60, 300)
             self.chr_tree = ttk.Treeview(cf, columns=cols, show='headings',
                                          selectmode='browse', height=10)
             for c, hd, wd in zip(cols, heads, widths):
@@ -985,8 +1016,8 @@ if tk is not None:
                                      anchor='w' if c == 'name' else 'center')
             csb = ttk.Scrollbar(cf, command=self.chr_tree.yview)
             self.chr_tree.configure(yscrollcommand=csb.set)
-            self.chr_tree.pack(side='left', fill='both', expand=True)
             csb.pack(side='right', fill='y')
+            self.chr_tree.pack(side='left', fill='both', expand=True)
             self.chr_tree.bind('<<TreeviewSelect>>', self.on_chr_select)
             self.chr_tree.bind('<Double-1>', lambda e: self.chr_entry.focus_set())
 
@@ -1000,12 +1031,11 @@ if tk is not None:
             sp = ttk.Frame(self.sound_nb, padding=2)
             self.sound_nb.add(sp, text='Sounds (.sdat)')
             sbar = ttk.Frame(sp)
-            sbar.pack(fill='x')
             self.sound_label = tk.StringVar(value=(
                 'Open Sounds\\Sound_All.sdat (or its .sd) in the list on the left.'))
-            ttk.Label(sbar, textvariable=self.sound_label).pack(side='left')
-            self.btn_sound_reload = ttk.Button(sbar, text='Reload', width=7,
-                                               command=self.reload_sounds)
+            ttk.Label(sp, textvariable=self.sound_label).pack(fill='x', anchor='w')
+            sbar.pack(fill='x', pady=(2, 0))
+            self.btn_sound_reload = reload_button(sbar, self.reload_sounds)
             self.btn_sound_reload.pack(side='right')
             self.btn_sound_export_all = ttk.Button(sbar, text='Export all WAVs…',
                                                    command=self.export_all_sounds,
@@ -1040,29 +1070,37 @@ if tk is not None:
             spw = ttk.PanedWindow(sp, orient='horizontal')
             spw.pack(fill='both', expand=True)
             sl = ttk.Frame(spw)
-            spw.add(sl, weight=2)
+            spw.add(sl, weight=3)
             cols = ('name', 'kind', 'sample', 'rate', 'length')
             heads = ('sound name', 'kind', 'sample', 'Hz', 'seconds')
-            widths = (245, 65, 70, 60, 70)
+            widths = (150, 52, 82, 48, 62)
             self.sound_tree = ttk.Treeview(sl, columns=cols, show='headings',
                                            selectmode='browse', height=11)
             for c, hd, wd in zip(cols, heads, widths):
                 self.sound_tree.heading(c, text=hd)
-                self.sound_tree.column(c, width=wd, stretch=(c == 'name'),
+                self.sound_tree.column(c, width=wd, minwidth=30 if c != 'name' else 40,
+                                       stretch=(c == 'name'),
                                        anchor='w' if c == 'name' else 'center')
             ssl = ttk.Scrollbar(sl, command=self.sound_tree.yview)
             self.sound_tree.configure(yscrollcommand=ssl.set)
-            self.sound_tree.pack(side='left', fill='both', expand=True)
             ssl.pack(side='right', fill='y')
+            self.sound_tree.pack(side='left', fill='both', expand=True)
             self.sound_tree.bind('<<TreeviewSelect>>', self.on_sound_select)
             self.sound_tree.bind('<Double-1>', lambda e: self.play_sound())
 
             sr = ttk.Frame(spw)
-            spw.add(sr, weight=3)
+            spw.add(sr, weight=2)
+
+            def _initial_sash(e, _done=[False]):
+                # start with the list taking ~65% so the info panel is the skinnier side
+                if not _done[0] and e.width > 300:
+                    _done[0] = True
+                    spw.sashpos(0, int(e.width * 0.49))
+            spw.bind('<Configure>', _initial_sash, add='+')
             ttk.Label(sr, text='Sound information', font=('Segoe UI', 9, 'bold')).pack(fill='x')
             inf = ttk.Frame(sr)
             inf.pack(fill='both', expand=True)
-            self.sound_info = tk.Text(inf, height=9, wrap='word', state='disabled',
+            self.sound_info = tk.Text(inf, height=9, width=36, wrap='word', state='disabled',
                                       font=('Consolas', 9), background='#ffffff',
                                       foreground='#000000', relief='solid', borderwidth=1)
             isb = ttk.Scrollbar(inf, command=self.sound_info.yview)
@@ -1078,7 +1116,7 @@ if tk is not None:
             ttk.Label(sr, foreground='#606060', text=(
                 'Play writes a temporary WAV and uses Windows sound. Music is rendered by a '
                 'simple SSEQ player, so it is an approximation. A backup is kept before edits.'),
-                wraplength=520, justify='left').pack(fill='x', pady=(4, 0))
+                wraplength=360, justify='left').pack(fill='x', pady=(4, 0))
 
             # page 2: the hash/index table in the .sd
             sdp = ttk.Frame(self.sound_nb, padding=2)
@@ -1087,8 +1125,7 @@ if tk is not None:
             sdbar.pack(fill='x')
             self.sd_label = tk.StringVar(value='Open a .sd file to see its hash/index table.')
             ttk.Label(sdbar, textvariable=self.sd_label).pack(side='left')
-            self.btn_sd_reload = ttk.Button(sdbar, text='Reload', width=7,
-                                            command=self.reload_sounds)
+            self.btn_sd_reload = reload_button(sdbar, self.reload_sounds)
             self.btn_sd_reload.pack(side='right')
             sdbox = ttk.Frame(sdp)
             sdbox.pack(fill='both', expand=True, pady=(4, 0))
@@ -1096,15 +1133,15 @@ if tk is not None:
                                         show='headings', selectmode='browse', height=12)
             for c, hd, wd in zip(('idx', 'hash', 'name', 'type', 'sid'),
                                  ('#', 'name hash', 'sound name', 'kind', 'index'),
-                                 (45, 120, 300, 80, 60)):
+                                 (40, 100, 220, 60, 50)):
                 self.sd_tree.heading(c, text=hd)
                 self.sd_tree.column(c, width=wd,
                                     stretch=(c == 'name'),
                                     anchor='w' if c == 'name' else 'center')
             sdsb = ttk.Scrollbar(sdbox, command=self.sd_tree.yview)
             self.sd_tree.configure(yscrollcommand=sdsb.set)
-            self.sd_tree.pack(side='left', fill='both', expand=True)
             sdsb.pack(side='right', fill='y')
+            self.sd_tree.pack(side='left', fill='both', expand=True)
             self.sd_tree.bind('<<TreeviewSelect>>', self.on_sd_select)
             sef = ttk.LabelFrame(sdp, text=' Selected .sd entry ', padding=6)
             sef.pack(side='bottom', fill='x', pady=(6, 0))
