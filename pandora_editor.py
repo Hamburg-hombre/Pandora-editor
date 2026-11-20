@@ -1586,7 +1586,7 @@ if tk is not None:
                 w = s.sample
                 sample = ('%s #%d' % (w.type_name().split()[0], w.index)) if w else '—'
                 rate = str(w.rate) if w else '—'
-                dur = '%.2f' % w.duration if w else '—'
+                dur = '%.2f' % s.duration if s.duration else '—'
                 iid = tree.insert('', 'end', values=(
                     s.name, 'music' if s.kind == 'music' else 'effect', sample, rate, dur))
                 self.sound_sels[iid] = s
@@ -1761,8 +1761,9 @@ if tk is not None:
                 filetypes=[('WAV audio', '*.wav'), ('All files', '*.*')])
             if not p:
                 return
+            limit = min(300, max(30, (s.duration or 60) + 1))
             try:
-                smp, rate = self.sound_archive.render(s, max_seconds=120)
+                smp, rate = self.sound_archive.render(s, max_seconds=limit)
                 soundmod.write_wav(p, smp, rate)
                 self.log('exported %s -> %s (%.2f s)' % (s.name, p, len(smp) / float(rate)))
             except Exception as e:
@@ -1779,7 +1780,8 @@ if tk is not None:
             def job():
                 n = 0
                 for s in arch.sounds:
-                    smp, rate = arch.render(s, max_seconds=30)
+                    limit = min(300, max(30, (s.duration or 60) + 1))
+                    smp, rate = arch.render(s, max_seconds=limit)
                     if smp:
                         soundmod.write_wav(os.path.join(folder, self._sound_file_name(s) + '.wav'),
                                            smp, rate)

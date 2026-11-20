@@ -270,7 +270,7 @@ class SoundTable:
 class SdatSound:
     """One named, playable item (a music sequence or a sound effect)."""
 
-    def __init__(self, name, kind, index, seq, sample, program, bank):
+    def __init__(self, name, kind, index, seq, sample, program, bank, duration=None):
         self.name = name
         self.kind = kind                 # 'music' or 'sfx'
         self.index = index               # index in SYMB / the .sd table order
@@ -278,12 +278,13 @@ class SdatSound:
         self.sample = sample             # Sample or None (sfx)
         self.program = program
         self.bank = bank
+        self._duration = duration
 
     @property
     def duration(self):
-        if self.kind == 'sfx' and self.sample:
-            return self.sample.duration
-        return None     # computed by the renderer when asked
+        if self._duration is not None:
+            return self._duration
+        return self.sample.duration if self.sample else 0.0
 
 
 class Sample:
@@ -460,18 +461,21 @@ class SoundArchive:
             for j in range(cnt):
                 rec = d[0x3c + 4 * j]
                 off = u16(d, 0x3c + 4 * j + 1)
-                notes = []
+                notes, lo, hi, regions = [], 0, 0, []
                 if rec == 0:
                     pass
                 elif rec < 16:
                     notes = [self._note_def(d, off)]
                 elif rec == 16:
                     lo, hi = d[off], d[off + 1]
-                    notes = [self._note_def(d, off + 2 + 12 * i)
+                    # Each entry is 2 unknown bytes + the 10-byte note def.
+                    notes = [self._note_def(d, off + 4 + 12 * i)
                              for i in range(max(0, hi - lo + 1))]
                 elif rec == 17:
-                    notes = [self._note_def(d, off + 8 + 12 * i) for i in range(8)]
-                instruments.append({'index': j, 'type': rec, 'offset': off, 'notes': notes})
+                    regions = [d[off + i] for i in range(8)]
+                    notes = [self._note_def(d, off + 10 + 12 * i) for i in range(8)]
+                instruments.append({'index': j, 'type': rec, 'offset': off, 'notes': notes,
+                                    'lo': lo, 'hi': hi, 'regions': regions})
             self.sbnk.append({'fid': fid, 'name': names[k] if k < len(names) else '?',
                               'swarids': swarids, 'instruments': instruments})
 
@@ -522,8 +526,13 @@ class SoundArchive:
             if seq['kind'] != 'music':
                 continue
             bank = seq['bank'] if seq['bank'] < len(self.sbnk) else 0
-            self.sounds.append(SdatSound(seq['name'], 'music', len(self.sounds),
-                                         seq, None, None, bank))
+            snd = SdatSound(seq['name'], 'music', len(self.sounds), seq, None, None, bank)
+            try:
+                notes, _off, span = self.sequence_notes(snd, 600)
+                snd._duration = span if span and span > 0 else None
+            except Exception:
+                snd._duration = None
+            self.sounds.append(snd)
         # Effects: instrument i of the FX bank -> SWAV number in its note.
         for seq in self.seqs:
             if seq['kind'] != 'sfx':
@@ -600,6 +609,15 @@ class SoundArchive:
                 lines += ['', 'Bank note: %d, envelope A/D/S/R = %d/%d/%d/%d, pan %d' %
                           (n['note'], n['attack'], n['decay'], n['sustain'], n['release'], n['pan'])]
         else:
+            lines += ['', 'Music length: %s' % ('%.2f s' % snd.duration if snd.duration else '?')]
+            try:
+                notes, _off, _span = self.sequence_notes(snd, 600)
+                programs = sorted({n[4] for n in notes})
+                lines += ['Notes:     %d (programs %s)' %
+                          (len(notes), ', '.join(str(p) for p in programs[:12]) +
+                           (' ...' if len(programs) > 12 else ''))]
+            except Exception:
+                pass
             lines += ['', 'The music is sequenced: notes refer to samples in %s.' %
                       (self.sbnk[snd.bank]['name'] if snd.bank < len(self.sbnk) else 'the bank')]
         lines += ['', 'The .sd file maps the hash above to the index the game uses.']
@@ -617,121 +635,69 @@ class SoundArchive:
             return smp[:int(max_seconds * rate)], rate
         return self._render_seq(snd, max_seconds, rate)
 
-    def _render_seq(self, snd, max_seconds, rate):
+    def sequence_notes(self, snd, max_seconds=120):
+        """Return (notes, data_offset, natural_length) for a music sequence.
+
+        The master track is walked first: it declares the real tracks and the
+        tempo before any of them play. Every address in SSEQ is relative to the
+        data offset (normally 0x1C) -- reading the raw value gives garbage.
+        """
         d = snd.seq['raw']
         off = u32(d, 0x18)
-        bank = self.sbnk[snd.bank] if snd.bank < len(self.sbnk) else None
-        tempo, tracks, notes = 120, [], []
-        master = {'pos': off, 'end': len(d), 'time': 0.0, 'stack': [], 'program': 0,
-                  'volume': 1.0, 'transpose': 0, 'wait': 0.0, 'depth': 0}
-        guard = 0
-        tick = 0.0
-        end_time = 0.0
-        max_ticks = int(max_seconds * 400)
-        while guard < 200000:
+        if not (0 < off < len(d)):
+            off = 0x1c
+        tempo = 120
+        tracks = []
+        p, guard = off, 0
+        while p < len(d) and guard < 20000:
             guard += 1
-            if not tracks:
-                tr = master
-            else:
-                tr = min(tracks, key=lambda t: t['time'])
-                if tr['time'] > max_seconds:
-                    break
-            if tr['pos'] >= tr['end']:
-                if tr is master:
-                    break
-                tracks.remove(tr)
-                continue
-            p = tr['pos']
             ev = d[p]
-            tr['pos'] = p + 1
-            sec_per_tick = 60.0 / (max(1, tempo) * 48.0)
-            if ev == 0xff:                                   # end of track
-                if tr is master:
-                    break
-                tracks.remove(tr)
-                continue
-            if ev == 0xfe:                                   # track mask
-                tr['pos'] += 2
-                continue
+            p += 1
+            if ev == 0xff:                                   # end of master
+                break
             if ev == 0x93:                                   # track definition
-                tnum = d[tr['pos']]
-                addr = d[tr['pos'] + 1] | (d[tr['pos'] + 2] << 8) | (d[tr['pos'] + 3] << 16)
-                tr['pos'] += 4
-                if addr < len(d):
-                    tracks.append({'pos': addr, 'end': len(d), 'time': tr['time'],
-                                   'stack': [], 'program': 0, 'volume': 1.0,
-                                   'transpose': 0, 'wait': 0.0, 'depth': 1})
-                continue
-            if ev == 0xe1:                                   # tempo
-                tempo = u16(d, tr['pos'])
-                tr['pos'] += 2
-                continue
-            if ev < 0x80:                                    # note on: note, vel, dur(VLQ)
-                note = ev
-                vel = d[tr['pos']]
-                tr['pos'] += 1
-                dur, tr['pos'] = _vlq(d, tr['pos'])
-                notes.append((tr['time'], dur * sec_per_tick, note + tr['transpose'],
-                              vel / 127.0, tr['program'], tr['volume']))
-                tr['time'] += dur * sec_per_tick
-                end_time = max(end_time, tr['time'])
-                continue
-            if ev == 0x80:                                   # rest
-                dur, tr['pos'] = _vlq(d, tr['pos'])
-                tr['time'] += dur * sec_per_tick
-                end_time = max(end_time, tr['time'])
-                continue
-            if ev == 0x81:                                   # program change
-                prog, tr['pos'] = _vlq(d, tr['pos'])
-                tr['program'] = prog
-                continue
-            if ev == 0xc0:                                   # pan (ignored, mono)
-                tr['pos'] += 1
-                continue
-            if ev == 0xc1:                                   # volume
-                tr['volume'] = d[tr['pos']] / 127.0
-                tr['pos'] += 1
-                continue
-            if ev == 0xc2:                                   # master volume
-                tr['pos'] += 1
-                continue
-            if ev == 0xc3:                                   # transpose
-                tr['transpose'] = d[tr['pos']] - 64
-                tr['pos'] += 1
-                continue
-            if 0xc4 <= ev <= 0xcf:                           # misc controller
-                tr['pos'] += 1
-                continue
-            if ev == 0xd4:                                   # loop start
-                tr['stack'].append((d[tr['pos']], tr['pos'] + 1))
-                tr['pos'] += 1
-                continue
-            if ev == 0xfc:                                   # loop end
-                if tr['stack']:
-                    count, where = tr['stack'][-1]
-                    if count == 0 or count > 1:
-                        if count > 1:
-                            tr['stack'][-1] = (count - 1, where)
-                        tr['pos'] = where
-                    else:
-                        tr['stack'].pop()
-                continue
-            if ev == 0x94 or ev == 0x95:                     # jump / call
-                addr = (d[tr['pos']] | (d[tr['pos'] + 1] << 8) | (d[tr['pos'] + 2] << 16))
-                tr['pos'] += 3
-                if addr < tr['pos'] and addr < len(d):
-                    tr['pos'] = addr
-                elif ev == 0x95:
-                    continue
-                continue
-            if ev == 0xfd:                                   # return
-                continue
-            # unknown event: skip one byte (a few control bytes are 2-byte)
-            continue
+                tnum = d[p]
+                addr = d[p + 1] | (d[p + 2] << 8) | (d[p + 3] << 16)
+                p += 4
+                if 0 < addr + off < len(d):
+                    tracks.append((tnum, addr + off))
+            elif ev == 0xfe:                                 # track mask
+                p += 2
+            elif ev == 0xe1:                                 # tempo
+                tempo = u16(d, p)
+                p += 2
+            elif ev < 0x80:                                  # note in master
+                p += 1
+                _, p = _vlq(d, p)
+            elif ev == 0x80:                                 # rest in master
+                _, p = _vlq(d, p)
+            elif ev in (0x94, 0x95):                         # jump / call
+                p += 3
+            elif ev in (0xe0, 0xe3):                         # 2-byte controllers
+                p += 2
+            elif 0xc0 <= ev <= 0xcf or 0xd0 <= ev <= 0xd9:  # 1-byte controllers
+                p += 1
 
-        if not notes or end_time <= 0:
+        if not tracks:
+            raise SoundError('This sequence has no playable tracks.')
+
+        sec_per_tick = [60.0 / (max(1, tempo) * 48.0)]
+        notes, spans = [], []
+        for tnum, start in tracks:
+            tnotes, span = self._parse_track(d, start, off, sec_per_tick, max_seconds)
+            notes.extend(tnotes)
+            spans.append(span if span else (tnotes[-1][0] + tnotes[-1][1] if tnotes else 0.0))
+        # A looping track repeats forever: show one pass through it, not the
+        # artificial cap used while rendering.
+        return notes, off, max(spans) if spans else 0.0
+
+    def _render_seq(self, snd, max_seconds, rate):
+        bank = self.sbnk[snd.bank] if snd.bank < len(self.sbnk) else None
+        notes, off, _span = self.sequence_notes(snd, max_seconds)
+        if not notes:
             raise SoundError('This sequence has no notes this player understands.')
 
+        end_time = max(n[0] + n[1] for n in notes)
         nout = min(int(end_time * rate) + rate // 2, int(max_seconds * rate))
         out = [0.0] * nout
         for start, dur, note, vel, program, vol in notes:
@@ -758,18 +724,120 @@ class SoundArchive:
             out = [v * scale for v in out]
         return [int(round(max(-32768, min(32767, v)))) for v in out], rate
 
+    def _parse_track(self, d, start, off, sec_per_tick, max_seconds):
+        """Walk one track and return (start_seconds, duration_seconds, note,
+        velocity, program, volume) for every note."""
+        notes = []
+        p, t, guard = start, 0.0, 0
+        program, volume, transpose = 0, 1.0, 0
+        loops, calls = [], []
+        loop_time = None                 # time of the first repeat (song length)
+        while p < len(d) and guard < 100000 and t < max_seconds:
+            guard += 1
+            ev = d[p]
+            p += 1
+            if ev == 0xff:                                   # end of track
+                break
+            if ev < 0x80:                                    # note: note, vel, dur(VLQ)
+                note = ev
+                vel = d[p] / 127.0
+                p += 1
+                dur, p = _vlq(d, p)
+                notes.append((t, dur * sec_per_tick[0], note + transpose,
+                              vel, program, volume))
+                t += dur * sec_per_tick[0]
+                continue
+            if ev == 0x80:                                   # rest
+                dur, p = _vlq(d, p)
+                t += dur * sec_per_tick[0]
+                continue
+            if ev == 0x81:                                   # program change
+                program, p = _vlq(d, p)
+                continue
+            if ev == 0x93 or ev == 0xfe:                     # nested track/mask
+                p += 4 if ev == 0x93 else 2
+                continue
+            if ev == 0xc0:                                   # pan (mono render)
+                p += 1
+                continue
+            if ev == 0xc1:                                   # track volume
+                volume = d[p] / 127.0
+                p += 1
+                continue
+            if ev == 0xc2:                                   # master volume (ignored)
+                p += 1
+                continue
+            if ev == 0xc3:                                   # transpose
+                transpose = d[p] - 64
+                p += 1
+                continue
+            if 0xc4 <= ev <= 0xcf or 0xd0 <= ev <= 0xd9:    # 1-byte controllers
+                p += 1
+                continue
+            if ev in (0xe0, 0xe3):                           # 2-byte controllers
+                p += 2
+                continue
+            if ev == 0xe1:                                   # tempo change
+                sec_per_tick[0] = 60.0 / (max(1, u16(d, p)) * 48.0)
+                p += 2
+                continue
+            if ev == 0xd4:                                   # loop start
+                loops.append((d[p], p + 1))
+                p += 1
+                continue
+            if ev == 0xfc:                                   # loop end
+                if loops:
+                    count, where = loops[-1]
+                    if count == 0 or count > 1:
+                        if loop_time is None:
+                            loop_time = t
+                        if count > 1:
+                            loops[-1] = (count - 1, where)
+                        p = where
+                    else:
+                        loops.pop()
+                continue
+            if ev == 0x94 or ev == 0x95:                     # jump / call
+                addr = d[p] | (d[p + 1] << 8) | (d[p + 2] << 16)
+                p += 3
+                target = addr + off
+                if 0 <= target < p:
+                    if loop_time is None and ev == 0x94:
+                        loop_time = t
+                    if ev == 0x95:
+                        calls.append(p)
+                    p = target
+                continue
+            if ev == 0xfd:                                   # return from call
+                if calls:
+                    p = calls.pop()
+                continue
+            # Anything else: one unknown byte, just move on.
+        return notes, loop_time
+
     def _sample_for_note(self, bank, program, note):
         if not bank or program >= len(bank['instruments']):
             return None
         ins = bank['instruments'][program]
+        notes = ins['notes']
         chosen = None
-        for nd in ins['notes']:
-            if not nd:
-                continue
-            if ins['type'] == 16 and note != nd['note'] and len(ins['notes']) > 1:
-                continue
-            if chosen is None or abs(nd['note'] - note) < abs(chosen['note'] - note):
-                chosen = nd
+        if ins['type'] == 16:                                # range instrument
+            i = note - ins.get('lo', 0)
+            if 0 <= i < len(notes):
+                chosen = notes[i]
+        elif ins['type'] == 17:                              # regional instrument
+            i = None
+            for k, end in enumerate(ins.get('regions', [])):
+                if end and note <= end:
+                    i = k
+                    break
+            if i is not None and i < len(notes):
+                chosen = notes[i]
+        else:                                                # single-note instrument
+            chosen = notes[0] if notes else None
+        if chosen is None and notes:
+            chosen = min((n for n in notes if n),
+                         key=lambda n: abs(n['note'] - note), default=None)
         if not chosen:
             return None
         swar_idx = bank['swarids'][chosen['swar']] if chosen['swar'] < 4 else 0xffff
