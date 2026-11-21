@@ -16,6 +16,7 @@ Workflow
   - The filter box narrows whatever list is showing (level names in Simple, file names in Advanced).
   - The progress bar and log box stay pinned to the bottom of the window; if the window is short,
     the file list and the tabs get shorter instead of the log disappearing.
+  - The small ↻ button on a tab's toolbar reloads that file from disk; hover it for a tooltip.
   - .nsbmd = models, .nsbtx = shared textures, .cvhm = collision, .roo = room boxes (now editable),
     .lp = enemy/object placements and paths (now viewable and editable), .chr = the level name table
     (now editable), .txt and .lvl = text (now editable), .char/.plt/.ico = pictures and palettes, and
@@ -167,7 +168,8 @@ Text (Text tab)
     original encoding and line endings (CRLF for this game), after keeping a backup copy.
   - .lvl is the level's Global.LVL: it stores resource lists in BEGIN "section" / END blocks. The
     status line lists the sections it found, so you can see where you are while editing.
-  - "Reload" throws the unsaved changes away. Ctrl+S also saves.
+  - The ↻ button reloads the file from disk (hover it for a tooltip) and throws the unsaved
+    changes away. Ctrl+S also saves.
   - Only text characters the original file can store are allowed (ASCII for these files).
 
 Data tab (.char, .plt, .ico, .crt, .nsbca, .nslbc, .tex)
