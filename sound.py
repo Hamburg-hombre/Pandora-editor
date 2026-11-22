@@ -663,9 +663,9 @@ class SoundArchive:
         off = u32(d, 0x18)
         if not (0 < off < len(d)):
             off = 0x1c
-        tempo = 120
+        tempos = []                            # (tick, bpm) -- tempo is global
         tracks = []
-        p, guard = off, 0
+        p, guard, tick = off, 0, 0
         while p < len(d) and guard < 20000:
             guard += 1
             ev = d[p]
@@ -681,27 +681,38 @@ class SoundArchive:
             elif ev == 0xfe:                                 # track mask
                 p += 2
             elif ev == 0xe1:                                 # tempo
-                tempo = u16(d, p)
+                tempos.append((tick, u16(d, p)))
                 p += 2
             elif ev < 0x80:                                  # note in master
                 p += 1
-                _, p = _vlq(d, p)
+                dur, p = _vlq(d, p)
+                tick += dur
             elif ev == 0x80:                                 # rest in master
+                dur, p = _vlq(d, p)
+                tick += dur
+            elif ev == 0x81:                                 # program in master
                 _, p = _vlq(d, p)
             elif ev in (0x94, 0x95):                         # jump / call
                 p += 3
             elif ev in (0xe0, 0xe3):                         # 2-byte controllers
                 p += 2
+            elif ev == 0xd4:                                 # loop start
+                p += 1
             elif 0xc0 <= ev <= 0xcf or 0xd0 <= ev <= 0xd9:  # 1-byte controllers
                 p += 1
 
         if not tracks:
             raise SoundError('This sequence has no playable tracks.')
 
-        sec_per_tick = [60.0 / (max(1, tempo) * 48.0)]
+        # Pass 1: collect tempo changes that live inside the tracks as well.
+        clock = _TempoClock(tempos)
+        for tnum, start in tracks:
+            self._parse_track(d, start, off, clock, max_seconds, tempos)
+        clock = _TempoClock(tempos)
+
         notes, spans = [], []
         for tnum, start in tracks:
-            tnotes, span = self._parse_track(d, start, off, sec_per_tick, max_seconds)
+            tnotes, span = self._parse_track(d, start, off, clock, max_seconds)
             notes.extend(tnotes)
             spans.append(span if span else (tnotes[-1][0] + tnotes[-1][1] if tnotes else 0.0))
         # A looping track repeats forever: show one pass through it, not the
@@ -734,7 +745,7 @@ class SoundArchive:
                 loop_body = resample(w.samples[w.loop_sample:], src_rate, rate)
                 if loop_body:
                     reps = (n - len(seg) + len(loop_body) - 1) // len(loop_body)
-                    seg.extend(loop_body * min(reps, 100))
+                    seg.extend(loop_body * reps)
             seg = seg[:n]
             if not seg:
                 continue
@@ -749,15 +760,21 @@ class SoundArchive:
             out = [v * scale for v in out]
         return [int(round(max(-32768, min(32767, v)))) for v in out], rate
 
-    def _parse_track(self, d, start, off, sec_per_tick, max_seconds):
-        """Walk one track and return (start_seconds, duration_seconds, note,
-        velocity, program, volume) for every note."""
+    def _parse_track(self, d, start, off, clock, max_seconds, tempo_sink=None):
+        """Walk one track and return (notes, loop_seconds).
+
+        Each note is (start_seconds, duration_seconds, note, velocity,
+        program, volume).  Time is kept in ticks and converted through
+        `clock`, so a tempo change fired by any other track retimes this one
+        too.  When `tempo_sink` is given, 0xE1 events found here are appended
+        to it as (tick, bpm) instead of being applied locally.
+        """
         notes = []
-        p, t, guard = start, 0.0, 0
+        p, t, guard = start, 0, 0                   # t counts ticks
         program, volume, transpose = 0, 1.0, 0
         loops, calls = [], []
         loop_time = None                 # time of the first repeat (song length)
-        while p < len(d) and guard < 100000 and t < max_seconds:
+        while p < len(d) and guard < 100000 and clock.sec(t) < max_seconds:
             guard += 1
             ev = d[p]
             p += 1
@@ -768,16 +785,22 @@ class SoundArchive:
                 vel = d[p] / 127.0
                 p += 1
                 dur, p = _vlq(d, p)
-                notes.append((t, dur * sec_per_tick[0], note + transpose,
-                              vel, program, volume))
-                t += dur * sec_per_tick[0]
+                notes.append((clock.sec(t), clock.sec(t + dur) - clock.sec(t),
+                              note + transpose, vel, program, volume))
+                t += dur
                 continue
             if ev == 0x80:                                   # rest
                 dur, p = _vlq(d, p)
-                t += dur * sec_per_tick[0]
+                t += dur
                 continue
             if ev == 0x81:                                   # program change
                 program, p = _vlq(d, p)
+                continue
+            if ev == 0xe1:                                   # tempo change
+                bpm = u16(d, p)
+                p += 2
+                if tempo_sink is not None:
+                    tempo_sink.append((t, bpm))
                 continue
             if ev == 0x93 or ev == 0xfe:                     # nested track/mask
                 p += 4 if ev == 0x93 else 2
@@ -802,10 +825,6 @@ class SoundArchive:
             if ev in (0xe0, 0xe3):                           # 2-byte controllers
                 p += 2
                 continue
-            if ev == 0xe1:                                   # tempo change
-                sec_per_tick[0] = 60.0 / (max(1, u16(d, p)) * 48.0)
-                p += 2
-                continue
             if ev == 0xd4:                                   # loop start
                 loops.append((d[p], p + 1))
                 p += 1
@@ -826,19 +845,22 @@ class SoundArchive:
                 addr = d[p] | (d[p + 1] << 8) | (d[p + 2] << 16)
                 p += 3
                 target = addr + off
-                if 0 <= target < p:
-                    if loop_time is None and ev == 0x94:
-                        loop_time = t
-                    if ev == 0x95:
-                        calls.append(p)
+                if 0 <= target < len(d):
+                    if ev == 0x95:                           # calls are usually
+                        calls.append(p)                      # forward, to a
+                    elif loop_time is None and target < p:   # subroutine below
+                        loop_time = t                        # the track body
                     p = target
                 continue
             if ev == 0xfd:                                   # return from call
                 if calls:
                     p = calls.pop()
+                else:
+                    break                                    # stray return
                 continue
             # Anything else: one unknown byte, just move on.
-        return notes, loop_time
+        span = clock.sec(loop_time) if loop_time is not None else None
+        return notes, span
 
     def _sample_for_note(self, bank, program, note):
         if not bank or program >= len(bank['instruments']):
@@ -1068,6 +1090,45 @@ def _vlq(d, p):
         if not b & 0x80:
             return v, p
     return v, p
+
+
+class _TempoClock:
+    """Convert sequence ticks to seconds using the global tempo changes.
+
+    Tempo in SSEQ is a single global parameter: whichever track fires an
+    0xE1 event, it retimes every track from that tick onwards.  `tempos` is a
+    list of (tick, bpm) pairs; later entries at the same tick win.
+    """
+
+    def __init__(self, tempos):
+        per_tick = {}
+        for tick, bpm in tempos or ():
+            per_tick[int(tick)] = int(bpm)
+        if 0 not in per_tick:
+            # before the first tempo event the sequencer runs at its default
+            first = min(per_tick) if per_tick else 0
+            per_tick[0] = per_tick[first] if per_tick else 120
+        ticks = sorted(per_tick)
+        self.points = []                      # [tick, seconds, sec_per_tick]
+        sec = 0.0
+        for i, tick in enumerate(ticks):
+            if i:
+                prev = self.points[-1]
+                sec += (tick - prev[0]) * prev[2]
+            self.points.append([tick, sec,
+                                60.0 / (max(1, per_tick[tick]) * 48.0)])
+
+    def sec(self, tick):
+        pts = self.points
+        lo, hi = 0, len(pts)
+        while lo + 1 < hi:
+            mid = (lo + hi) // 2
+            if pts[mid][0] <= tick:
+                lo = mid
+            else:
+                hi = mid
+        base = pts[lo]
+        return base[1] + (tick - base[0]) * base[2]
 
 
 def _envelope(seg, total, rate, env):
