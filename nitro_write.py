@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 from nitro import *
 from scene import MatInfo
+import nitro_append
 
 class ImportError_(Exception):
     pass
@@ -759,6 +760,58 @@ def auto_map(groups, infos, base, usage):
     return auto
 
 
+# ------------------------------------------------- new material/texture helpers
+FMT_LABELS = OrderedDict([
+    (5, '4x4 compressed (no alpha)'),
+    (1, 'A3I5 (alpha + 32 colours)'),
+    (6, 'A5I3 (alpha + 8 colours)'),
+    (3, 'I4 (16 colours)'),
+    (4, 'I8 (256 colours)'),
+    (2, 'I2 (4 colours)'),
+    (7, 'direct colour (no palette)'),
+])
+FMT_PALETTE = {1: 32, 2: 4, 3: 16, 4: 256, 5: 64, 6: 8, 7: 0}
+TEX_SIZES = (8, 16, 32, 64, 128, 256)
+
+
+def _pow2_at_or_above(n):
+    for s in TEX_SIZES:
+        if n <= s:
+            return s
+    return TEX_SIZES[-1]
+
+
+def infer_tex_spec(png):
+    """Suggest a texture format/size from a source image (for new materials)."""
+    im = Image.open(png).convert('RGBA')
+    w, h = _pow2_at_or_above(im.width), _pow2_at_or_above(im.height)
+    a = np.asarray(im)[:, :, 3]
+    has_alpha = bool((a < 250).any())
+    return dict(fmt=1 if has_alpha else 5, w=w, h=h)
+
+
+def _encode_new_texture(group_name, png, spec, log=print):
+    """Encode a source image into a brand-new texture spec for nitro_append."""
+    im = Image.open(png).convert('RGBA')
+    w, h = int(spec.get('w', 64)), int(spec.get('h', 64))
+    fmt = int(spec.get('fmt', 5))
+    if fmt not in FMT_LABELS:
+        raise ImportError_('unknown texture format %r' % fmt)
+    if (w, h) != im.size:
+        log('resizing %s from %dx%d to %dx%d for new material' %
+            (os.path.basename(png), im.width, im.height, w, h))
+        im = im.resize((w, h), Image.LANCZOS)
+    tex = type('Spec', (), {})()
+    tex.fmt, tex.w, tex.h = fmt, w, h
+    tex.color0_transp = fmt in (1, 2, 3, 4, 6)
+    data1, data2, pal = encode_texture(tex, im, FMT_PALETTE[fmt])
+    base = ''.join(c if c.isalnum() or c == '_' else '_' for c in (group_name or 'OBJ'))[:11].strip('_') or 'OBJ'
+    name = (base + '_tex')[:15]
+    return dict(name=name, fmt=fmt, w=w, h=h,
+                color0_transp=tex.color0_transp, data1=data1, data2=data2,
+                palette=list(pal or []))
+
+
 def analyze_replace(nsbmd_path, obj_path, shared_tex=None):
     d = open(nsbmd_path, 'rb').read()
     n = NSBMD(d)
@@ -773,8 +826,19 @@ def analyze_replace(nsbmd_path, obj_path, shared_tex=None):
     targets = [dict(idx=k, name=inf.mat['name'], tex=inf.tex.name if inf.tex else None,
                     size=(inf.tex.w, inf.tex.h) if inf.tex else None, tris=usage.get(k, 0))
                for k, inf in enumerate(infos)]
-    gl = [dict(name=g, tris=len(t), tex=pick_mtl(mtl, g)) for g, t in groups.items()]
-    return dict(groups=gl, targets=targets, auto=auto_map(gl, infos, base, usage), slots=len(shape_draws(m)))
+    gl = []
+    for g, t in groups.items():
+        tex = pick_mtl(mtl, g)
+        matched = _resolve_material(infos, base, g)
+        entry = dict(name=g, tris=len(t), tex=tex, matched=matched)
+        # A material not named after any of the model's materials is "new":
+        # by default it gets its own material plus a texture appended to the
+        # level's texture bank, instead of overwriting an unrelated slot.
+        entry['new'] = matched is None and bool(tex)
+        entry.update(infer_tex_spec(tex) if tex else dict(fmt=5, w=64, h=64))
+        gl.append(entry)
+    return dict(groups=gl, targets=targets, auto=auto_map(gl, infos, base, usage),
+                slots=len(shape_draws(m)), fmt_labels=FMT_LABELS, sizes=list(TEX_SIZES))
 
 
 def replace_model(nsbmd_path, obj_path, mapping=None, import_textures=True, shared_tex=None,
@@ -805,22 +869,89 @@ def replace_model(nsbmd_path, obj_path, mapping=None, import_textures=True, shar
     usage = _usage(m0)
     gl = [dict(name=g, tris=len(t), tex=pick_mtl(mtl, g)) for g, t in groups.items()]
     mp = auto_map(gl, infos, base, usage)
+    auto0 = dict(mp)
     mp.update({k: v for k, v in (mapping or {}).items() if k in groups})
     for g, t in mp.items():
+        if isinstance(t, dict):
+            continue                       # a new material, created below
         if not (0 <= t < len(infos)):
             raise ImportError_('bad material mapping for %r' % g)
-    report = dict(mapping={g: infos[t].mat['name'] for g, t in mp.items()}, textures=[], warnings=[])
 
-    # ---- textures first (they never change file sizes)
+    # ---- append genuinely new materials (and their textures) --------------
+    # A mapping value can be a dict from the dialog: {'fmt','w','h'} means
+    # "create a new material for this OBJ part" instead of reusing an existing
+    # slot.  Those textures are appended to the level bank; nothing is
+    # overwritten and no parts have to be merged into an unrelated material.
     files = {}
     d = d0
     shared_bytes = None
+    new_parts = []
+    for g, spec in mp.items():
+        if not isinstance(spec, dict):
+            continue
+        tp = pick_mtl(mtl, g)
+        if not tp:
+            log('WARNING: new material %r has no image in the .mtl - using an existing material instead' % g)
+            mp[g] = auto0[g]
+            continue
+        try:
+            tadd = _encode_new_texture(g, tp, spec, log)
+        except Exception as e:
+            log('WARNING: cannot encode the image for new material %r: %s - using an existing material' % (g, e))
+            mp[g] = auto0[g]
+            continue
+        new_parts.append((g, tadd))
+
+    if new_parts:
+        tex_adds = [tadd for _g, tadd in new_parts]
+        if n0.tex is not None:
+            d, tex_names = nitro_append.append_textures(d, tex_adds, log)
+        else:
+            if not shared_path:
+                raise ImportError_('new materials need a shared .nsbtx but its path was not given')
+            shared_bytes, tex_names = nitro_append.append_textures(
+                open(shared_path, 'rb').read(), tex_adds, log)
+
+        # Clone the parameters of the most-used textured material.  The
+        # texture/palette names themselves live in the material section's
+        # dictionaries, which append_materials() rebuilds for us.
+        template = 0
+        if usage:
+            template = max(range(len(infos)), key=lambda k: (usage.get(k, 0), infos[k].tex is not None))
+        madds = [dict(name=g, template=template,
+                      tex_name=tex_names[tadd['name']], pal_name=tadd.get('pal_name'))
+                 for g, tadd in new_parts]
+        d, new_indices = nitro_append.append_materials(d, madds, log)
+        for (g, tadd), mi in zip(new_parts, new_indices):
+            mp[g] = mi
+
+        n0 = NSBMD(d)
+        m0 = n0.models[0]
+        if n0.tex is not None:
+            tb0 = n0.tex
+        elif shared_bytes is not None:
+            tb0 = NSBTX(shared_bytes).tex
+        infos = [MatInfo(base, mt, tb0) for mt in m0.materials]
+        log('appended %d new material(s): %s' % (
+            len(new_parts), ', '.join('%s -> %s' % (g, infos[mp[g]].mat['name']) for g, _t in new_parts)))
+
+    report = dict(mapping={g: infos[t].mat['name'] for g, t in mp.items()}, textures=[], warnings=[])
+    report['new_materials'] = []
+    for g, tadd in new_parts:
+        if isinstance(mp[g], int) and mp[g] < len(infos):
+            report['new_materials'].append((g, infos[mp[g]].mat['name']))
+            report['textures'].append((tex_names[tadd['name']], 'appended for ' + (g or 'OBJ part')))
+
+    # ---- textures of the existing materials (same-length in-place writes)
     report['texture_bank'] = ('the model itself' if n0.tex is not None
                               else (os.path.basename(shared_path) if shared_path else None))
     if import_textures:
         done = set()
         shared_slot, no_slot = 0, []
+        appended = {g for g, _t in new_parts}
         for g in sorted(groups, key=lambda g: -len(groups[g])):
+            if g in appended:              # its texture is already appended
+                continue
             tp, inf = pick_mtl(mtl, g), infos[mp[g]]
             if not tp:
                 continue

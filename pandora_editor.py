@@ -330,8 +330,10 @@ if tk is not None:
         return b
 
     class MapDialog(tk.Toplevel):
-        """Ask which of the model's materials each OBJ material group should use."""
+        """Choose each OBJ material's target: an existing material, or a new
+        one whose texture is appended to the level's .nsbtx."""
         MAXROWS = 12
+        NEW = 'NEW: create own material + texture'
 
         def __init__(self, parent, info):
             super().__init__(parent)
@@ -342,45 +344,69 @@ if tk is not None:
             for tg in info['targets']:
                 tx = ('  [%s %dx%d]' % (tg['tex'], tg['size'][0], tg['size'][1])) if tg['tex'] else '  [no texture]'
                 self.names.append('%d: %s%s' % (tg['idx'], tg['name'], tx))
-            ttk.Label(self, wraplength=560, justify='left', padding=8, text=(
-                'The model has %d shape slot(s) and %d material(s). Choose which of the model\'s own materials '
-                'each part of your OBJ should use (the texture comes from that material).' %
-                (info['slots'], len(info['targets'])))).grid(row=0, column=0, columnspan=2, sticky='w')
+            self.fmts = ['%d: %s' % (k, v) for k, v in info['fmt_labels'].items()]
+            self.sizes = ['%dx%d' % (s, s) for s in info['sizes']]
+            ttk.Label(self, wraplength=700, justify='left', padding=8, text=(
+                'The model has %d shape slot(s) and %d material(s). For each part, choose an existing material '
+                '(its texture is reused) or "NEW" to give the part its own material and append its texture to '
+                'the level\'s .nsbtx (nothing is overwritten). NEW parts may still share a shape slot if the '
+                'model has fewer slots than parts.' %
+                (info['slots'], len(info['targets'])))).grid(row=0, column=0, columnspan=3, sticky='w')
             withtex = sum(1 for g in info['groups'] if g['tex'])
             if withtex:
-                note = ('Your OBJ brings %d texture image(s) for %d part(s); they are copied into the model\'s '
-                        'texture slots when the box below is ticked.' % (len({g['tex'] for g in info['groups'] if g['tex']}),
-                                                                        withtex))
+                note = ('Your OBJ brings %d texture image(s) for %d part(s). Parts set to NEW get their own new '
+                        'texture; the others are copied into the chosen material\'s existing texture slot '
+                        '(if "copy textures" is ticked).' %
+                        (len({g['tex'] for g in info['groups'] if g['tex']}), withtex))
             else:
                 note = ('Your OBJ does not name any texture image (its .mtl has no map_Kd, or the images are not '
-                        'next to the OBJ), so the parts can only use the textures this model already has.')
-            ttk.Label(self, wraplength=560, justify='left', padding=(8, 0, 8, 6), foreground=('black' if withtex else '#a00000'),
-                      text=note).grid(row=1, column=0, columnspan=2, sticky='w')
+                        'next to the OBJ), so the parts can only use the textures this model already has; NEW '
+                        'needs an image.')
+            ttk.Label(self, wraplength=700, justify='left', padding=(8, 0, 8, 6),
+                      foreground=('black' if withtex else '#a00000'),
+                      text=note).grid(row=1, column=0, columnspan=3, sticky='w')
+            ttk.Label(self, text='OBJ material', font='TkDefaultFont 9 bold').grid(row=2, column=0, sticky='w', padx=8)
+            ttk.Label(self, text='target material', font='TkDefaultFont 9 bold').grid(row=2, column=1, sticky='w')
+            ttk.Label(self, text='new texture format / size', font='TkDefaultFont 9 bold').grid(row=2, column=2, sticky='w')
             self.vars = {}
             groups = sorted(info['groups'], key=lambda g: -g['tris'])
-            for r, g in enumerate(groups[:self.MAXROWS], start=2):
+            for r, g in enumerate(groups[:self.MAXROWS], start=3):
                 lab = '%s  (%d triangles%s)' % (g['name'] or '(no material)', g['tris'],
                                                  ', ' + os.path.basename(g['tex']) if g['tex'] else ', no image')
                 ttk.Label(self, text=lab).grid(row=r, column=0, sticky='w', padx=8, pady=2)
-                v = tk.StringVar(value=self.names[info['auto'][g['name']]])
-                self.vars[g['name']] = v
-                ttk.Combobox(self, textvariable=v, values=self.names, state='readonly', width=46).grid(
-                    row=r, column=1, padx=8, pady=2)
-            r = min(len(groups), self.MAXROWS) + 2
+                start = self.NEW if g.get('new') else self.names[info['auto'][g['name']]]
+                mv = tk.StringVar(value=start)
+                self.vars[g['name']] = mv
+                ttk.Combobox(self, textvariable=mv, values=self.names + [self.NEW],
+                             state='readonly', width=44).grid(row=r, column=1, padx=8, pady=2)
+                fv = tk.StringVar(value='%d: %s' % (g.get('fmt', 5), dict(info['fmt_labels']).get(g.get('fmt', 5), '')))
+                sv = tk.StringVar(value='%dx%d' % (g.get('w', 64), g.get('h', 64)))
+                row = ttk.Frame(self)
+                row.grid(row=r, column=2, padx=8, pady=2)
+                fc = ttk.Combobox(row, textvariable=fv, values=self.fmts, state='readonly', width=26)
+                sc = ttk.Combobox(row, textvariable=sv, values=self.sizes, state='readonly', width=7)
+                fc.pack(side='left'); sc.pack(side='left', padx=4)
+                self.vars[g['name']] = (mv, fv, sv)
+                def _toggle(_e=None, mv=mv, fc=fc, sc=sc):
+                    state = 'readonly' if mv.get() == self.NEW else 'disabled'
+                    fc.configure(state=state); sc.configure(state=state)
+                mv.trace_add('write', _toggle)
+                _toggle()
+            r = min(len(groups), self.MAXROWS) + 3
             if len(groups) > self.MAXROWS:
                 ttk.Label(self, foreground='gray', text='(+%d smaller parts use the automatic choice)' %
-                          (len(groups) - self.MAXROWS)).grid(row=r, column=0, columnspan=2, sticky='w', padx=8)
+                          (len(groups) - self.MAXROWS)).grid(row=r, column=0, columnspan=3, sticky='w', padx=8)
                 r += 1
             self.tex_var = tk.BooleanVar(value=True)
-            ttk.Checkbutton(self, variable=self.tex_var, text="Also copy the OBJ's textures (from its .mtl) into those "
+            ttk.Checkbutton(self, variable=self.tex_var, text="Also copy the OBJ's textures into existing "
                             "materials' texture slots (resized, palette-limited)").grid(
-                row=r, column=0, columnspan=2, sticky='w', padx=8, pady=(6, 0))
+                row=r, column=0, columnspan=3, sticky='w', padx=8, pady=(6, 0))
             self.bb_var = tk.BooleanVar(value=True)
             ttk.Checkbutton(self, variable=self.bb_var, text='Turn off billboard nodes that receive new geometry '
                             '(stops those parts spinning around with the camera)').grid(
-                row=r + 1, column=0, columnspan=2, sticky='w', padx=8, pady=(0, 6))
+                row=r + 1, column=0, columnspan=3, sticky='w', padx=8, pady=(0, 6))
             bf = ttk.Frame(self)
-            bf.grid(row=r + 2, column=0, columnspan=2, sticky='e', padx=8, pady=8)
+            bf.grid(row=r + 2, column=0, columnspan=3, sticky='e', padx=8, pady=8)
             ttk.Button(bf, text='Cancel', command=self.destroy).pack(side='right', padx=4)
             ttk.Button(bf, text='Replace model', command=self.ok).pack(side='right')
             self.transient(parent)
@@ -388,7 +414,13 @@ if tk is not None:
             parent.wait_window(self)
 
         def ok(self):
-            mapping = {g: int(v.get().split(':')[0]) for g, v in self.vars.items()}
+            mapping = {}
+            for g, (mv, fv, sv) in self.vars.items():
+                if mv.get() == self.NEW:
+                    mapping[g] = dict(fmt=int(fv.get().split(':')[0]),
+                                      w=int(sv.get().split('x')[0]), h=int(sv.get().split('x')[1]))
+                else:
+                    mapping[g] = int(mv.get().split(':')[0])
             self.result = (mapping, bool(self.tex_var.get()), bool(self.bb_var.get()))
             self.destroy()
 
@@ -3514,6 +3546,10 @@ if tk is not None:
                          % (os.path.basename(path), os.path.basename(obj), rep['slots_used'], rep['slots'],
                             rep['total_tris'], len(rep['textures']), rep.get('texture_bank') or 'nothing',
                             rep['size_delta']))
+                if rep.get('new_materials'):
+                    self.log('appended %d new material(s)/texture(s) to the level texture bank: %s'
+                             % (len(rep['new_materials']),
+                                ', '.join('%s -> %s' % m for m in rep['new_materials'])))
                 if rep['total_tris'] > 2048:
                     self.log('NOTE: the DS draws at most ~2048 triangles per frame; this model has %d.' % rep['total_tris'])
                 cvs = sorted(f for f in os.listdir(os.path.dirname(path)) if f.lower().endswith('.cvhm'))

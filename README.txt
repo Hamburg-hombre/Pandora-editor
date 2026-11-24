@@ -34,12 +34,17 @@ Models (Model tab)
   View controls (all 3D views): drag = rotate, right-drag = pan, wheel = zoom, "Reset view" recentres.
   Export OBJ...            one OBJ object per shape, named shpNNN_<node>.
   Replace with any OBJ...  puts ANY OBJ into the selected model, whatever its object names or where it came
-                           from. You choose which of the model's own materials each part of your OBJ uses
-                           (the texture comes from that material), and can copy the OBJ's textures (from its
-                           .mtl) into those materials' texture slots.
-      * The model keeps its own materials, so the number of different textures you can show is limited to
-        the number of materials the target model has. Pick a target with enough materials
-        (characters and level pieces usually have several; a barrel has one).
+                           from. For each part you choose one of the model's own materials, or "NEW" to give
+                           it its own material and append its texture to the level's .nsbtx. Parts left on
+                           an existing material can copy the OBJ's image (from its .mtl) into that material's
+                           texture slot.
+      * "NEW" parts keep their own texture instead of overwriting an existing one: the level's .nsbtx grows
+        by a new named texture + palette, and a matching material is added to the .nsbmd. The dialog asks
+        which DS texture format and size to use for each NEW part (guessed from the image). Parts without
+        a texture image in the .mtl cannot use NEW. Both edited files are backed up before saving.
+      * Shape slots are still reused, so a NEW part can share a slot with another part when the model has
+        fewer slots than the OBJ has materials; the tool says so. Keeping parts on existing materials still
+        lets you cap the number of different textures without growing the files.
       * The dialog also tells you up front whether your OBJ actually brings images (it needs the .mtl next
         to the .obj, with "map_Kd <image>" lines, and the images on disk). After the replacement the log
         says how many textures were imported and into which file.
