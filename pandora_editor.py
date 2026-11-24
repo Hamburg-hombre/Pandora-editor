@@ -569,6 +569,7 @@ if tk is not None:
             self.tree.pack(side='left', fill='both', expand=True)
             sb.pack(side='right', fill='y')
             self.tree.bind('<<TreeviewSelect>>', self.on_select)
+            self.tree.bind('<Double-1>', self.on_tree_double_click)       # Simple mode: open the 3D viewer
             ttk.Button(left, text='Export ALL models + collision (OBJ + PNG)…', command=self.do_export_all).pack(fill='x', pady=(4, 0))
 
             right = ttk.Frame(body)
@@ -1314,6 +1315,26 @@ if tk is not None:
                     self.tree_paths[iid] = os.path.join(r, f)
                     n += 1
             self.info.set('%d files in %s' % (n, root))
+
+        def on_tree_double_click(self, event):
+            """Simple mode: double-click a level name -> open it in the 3D viewer window."""
+            if self.browse_mode.get() != 'simple':
+                return
+            iid = self.tree.identify_row(event.y)
+            work = self.work_var.get().strip()
+            if not iid or not os.path.isdir(os.path.join(work, 'Levels')):
+                return
+            name = self.tree.item(iid, 'text')
+            try:
+                import viewer3d_launcher as launcher
+            except Exception as e:
+                return messagebox.showerror('3D viewer', 'Keep the viewer3d_*.py files next to this file (%s: %s)'
+                                            % (type(e).__name__, e))
+            err = launcher.open_level(work, name)
+            if err:
+                messagebox.showerror('3D viewer', err)
+            else:
+                self.log('opening %s in the 3D viewer' % name)
 
         def on_select(self, _e=None):
             sel = self.tree.selection()
