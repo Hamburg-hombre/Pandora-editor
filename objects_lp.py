@@ -182,10 +182,14 @@ def _crt_entries(crt, lvl_ai_names=()):
     table_end = str_off if str_off is not None else len(crt)
     while off + 16 <= table_end:
         h, a, b = struct.unpack_from('<III', crt, off)
-        if b == 0 and a in (9, 0x0b):
-            (a9 if a == 9 else ab).append(h)
+        # The third word is a flags field, not a "must be zero" marker: the
+        # fourth object template (w1 0x8de900b2, "Destructable Bottle2") has
+        # 0x00000808 there.  Filtering on b == 0 drops that real template and
+        # shifts every following name by one slot.
+        if a in (9, 0x0b):
+            (a9 if a == 9 else ab).append((h, b))
         off += 16
-    for i, h in enumerate(a9):
+    for i, (h, _b) in enumerate(a9):
         yield h, names[i] if i < len(names) else 'object template %08x' % h
     for i, h in enumerate(ab):
         yield h, lvl_ai_names[i] if i < len(lvl_ai_names) else 'AI template %08x' % h
@@ -231,7 +235,9 @@ def load_template_details(crt_path, lvl_path=None):
     table_end = str_off if str_off is not None else len(crt)
     while off + 16 <= table_end:
         h, a, b = struct.unpack_from('<III', crt, off)
-        if b == 0 and a in (9, 0x0b):
+        # See _crt_entries: b is a flags word.  The fourth object template has
+        # b == 0x00000808; requiring b == 0 loses it and mislabels 70 templates.
+        if a in (9, 0x0b):
             (a9 if a == 9 else ab).append(h)
         off += 16
     out = []
