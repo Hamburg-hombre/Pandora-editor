@@ -730,7 +730,8 @@ class MainWindow(QMainWindow):
             self.model_combo.clear()
             self.model_combo.addItems([''] + stems)
             self.model_combo.setCurrentText(o.model or '')
-            self.p_how.setText({'override': 'your override', 'name': 'CHR name', 'template': 'shared template',
+            self.p_how.setText({'override': 'your override', 'builtin': 'built-in template map',
+                                'name': 'CHR name', 'template': 'shared template',
                                 None: 'not found (marker shown)'}[o.how])
             for i in range(self.obj_tree.topLevelItemCount()):
                 it = self.obj_tree.topLevelItem(i)
@@ -814,7 +815,7 @@ class MainWindow(QMainWindow):
             lv.resolver.by_w1['%08X' % o.rec.w1] = stem
         lv.resolver.save_overrides()
         for ob in lv.objects:
-            ob.model, ob.how = lv.resolver.resolve(ob.rec.w1, ob.name)
+            ob.model, ob.how = lv.resolver.resolve(ob.rec.w1, ob.name, ob.rec.is_ai)
         self.view.ensure_models()
         self.view.object_changed()
         self._fill_objects()
@@ -829,7 +830,7 @@ class MainWindow(QMainWindow):
         lv.resolver.by_w1.pop('%08X' % o.rec.w1, None)
         lv.resolver.save_overrides()
         for ob in lv.objects:
-            ob.model, ob.how = lv.resolver.resolve(ob.rec.w1, ob.name)
+            ob.model, ob.how = lv.resolver.resolve(ob.rec.w1, ob.name, ob.rec.is_ai)
         self.view.object_changed()
         self._fill_objects()
         self._on_selected(o.idx)

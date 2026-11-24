@@ -10,6 +10,7 @@ from nitro import NSBMD, NSBTX, shape_draws, run_display_list, mat_apply, mat_ap
 from scene import MatInfo
 import objects_lp as lpmod
 import collision as colmod
+import viewer3d_model_map as model_map
 
 FILE_TYPES = ('nsbmd', 'cvhm', 'roo', 'lp', 'nsbtx')
 
@@ -152,11 +153,13 @@ def load_model(path, shared_tex=None, use_textures=True):
 class ModelResolver:
     """Finds the .nsbmd that an Objects.LP placement should show.
 
-    The placement stores an index into CodeStrings.CHR. That name is tried against the model
-    files directly (level folder first, then <work>/Models); placements that share a template
-    hash (w1) inherit a model found for any member of the group; finally the user's own
-    overrides (<work>/_viewer3d_overrides.json) win over everything."""
+    Resolution order: user overrides, the verified built-in table in
+    viewer3d_model_map, the instance (CHR) name, then a per-template guess.
+    Logical markers (waypoints, spawns, hints) and AI spawns are never given a
+    guessed model - they are drawn as markers instead.
+    """
     OVERRIDES = '_viewer3d_overrides.json'
+
 
     def __init__(self, work, level_dir):
         self.work, self.level_dir = work, level_dir
@@ -185,7 +188,8 @@ class ModelResolver:
     def _candidates(name):
         n = name.lower()
         out = [n, re.sub(r'\d+$', '', n), re.sub(r'_?\d+[a-z]?$', '', n),
-               re.sub(r'_(top|bottom)$', '', n)]
+               re.sub(r'_(top|bottom)$', '', n),
+               re.sub(r'\d+', '', n)]          # corridor01_LP -> corridor_lp
         return [c for i, c in enumerate(out) if c and c not in out[:i]]
 
     def by_chr_name(self, name):
@@ -194,21 +198,37 @@ class ModelResolver:
                 return c
         return None
 
-    def prepare(self, records_with_names):
-        """records_with_names: [(w1, chr_name)] - builds the w1 propagation table."""
+    def prepare(self, records):
+        """records: [(w1, chr_name)] or [(w1, chr_name, is_ai)] - builds the
+        fallback w1 propagation table.  Logical markers, AI spawns and
+        variable-model templates are excluded: one member's model must not be
+        copied to every placement sharing the template."""
         self.auto_w1 = {}
-        for w1, name in records_with_names:
+        for rec in records:
+            w1, name = rec[0], rec[1]
+            is_ai = rec[2] if len(rec) > 2 else False
+            if (w1 == 0 or is_ai or w1 in model_map.NO_MODEL_W1
+                    or w1 in model_map.VARIABLE_W1):
+                continue
             m = self.by_chr_name(name)
             if m:
                 self.auto_w1.setdefault(w1, m)
 
-    def resolve(self, w1, name):
-        """-> (model stem or None, how) with how in override/name/template/None."""
+    def resolve(self, w1, name, is_ai=False):
+        """-> (model stem or None, how) with how in
+        override/builtin/name/template/None."""
         m = self.by_name.get(name.lower())
         if m is None:
             m = self.by_w1.get('%08X' % w1)
         if m and m in self.index:
             return m, 'override'
+        m, how = model_map.builtin(w1, name, self.index, is_ai)
+        if how == 'none':
+            return None, None            # logical marker: draw a marker only
+        if m:
+            return m, how
+        if is_ai:
+            return None, None
         m = self.by_chr_name(name)
         if m:
             return m, 'name'
@@ -353,10 +373,11 @@ class Level:
                 lv.resolver = ModelResolver(work, d)
                 names = [lv.chr.strings[r.h1] if lv.chr and r.h1 < len(lv.chr.strings) else 'h1_%d' % r.h1
                          for r in lv.lp.records()]
-                lv.resolver.prepare([(r.w1, n) for r, n in zip(lv.lp.records(), names)])
+                lv.resolver.prepare([(r.w1, n, r.is_ai)
+                                      for r, n in zip(lv.lp.records(), names)])
                 for i, (r, n) in enumerate(zip(lv.lp.records(), names)):
                     o = ObjectInst(i, r, n)
-                    o.model, o.how = lv.resolver.resolve(r.w1, n)
+                    o.model, o.how = lv.resolver.resolve(r.w1, n, r.is_ai)
                     lv.objects.append(o)
                 for p in lv.lp.paths():
                     nodes = np.array([p.node_pos(i) for i in range(p.node_count)], np.float64)
