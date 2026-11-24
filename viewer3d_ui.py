@@ -731,6 +731,7 @@ class MainWindow(QMainWindow):
             self.model_combo.addItems([''] + stems)
             self.model_combo.setCurrentText(o.model or '')
             self.p_how.setText({'override': 'your override', 'builtin': 'built-in template map',
+                                'ai-name': 'AI spawn name (inferred)',
                                 'name': 'CHR name', 'template': 'shared template',
                                 None: 'not found (marker shown)'}[o.how])
             for i in range(self.obj_tree.topLevelItemCount()):

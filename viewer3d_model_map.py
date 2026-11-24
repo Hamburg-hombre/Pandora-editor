@@ -78,6 +78,43 @@ W1_MODEL = {
     0x0b101b9f: 'mini_game_panel', # Mini Game Panel (STR_Button*)
 }
 
+# AI template hash -> character model.  These 8 template names are themselves
+# character resource names (Global.LVL / CRT strings), so the link is direct.
+AI_W1_MODEL = {
+    0xc6eae5b4: 'scaramanga',       # Scaramanga
+    0x8aad202e: 'oddjob',           # Oddjob
+    0xe11a27c9: 'goldfinger',       # Goldfinger
+    0x03e40693: 'dr_no',            # Dr. No
+    0xdbe1a2fd: 'xenia_onatopp',    # Onatopp
+    0x97700945: 'vt_bot',           # VT BOT
+    0xe6abb636: 'triad_informant',  # Triad Informer (Mini-Boss)
+    0xb88ab09a: 'v_miniosp',        # Vehicle (Mini Osprey)
+}
+
+# The other ~80 AI templates are weapon/archetype variants ("P90 Example",
+# "Mamba Example", ...) whose resolved CRT records carry only an animation-set
+# hash (+0x10) and a weapon hash (+0x14) - no character-model hash.  Their
+# appearance is encoded in the spawn's instance name instead, with a very
+# regular scheme (verified across all 706 AI spawns):
+AI_NAME_MODEL = [
+    ('finalocto', 'octoguard'),
+    ('tanktop', 'tanktop'),
+    ('oddjob', 'oddjob'),
+    ('goldfinger', 'goldfinger'),
+    ('e_r10_xenia', 'xenia_onatopp'),
+    ('e_drno', 'dr_no'),
+    ('e_miniosp', 'v_miniosp'),
+    ('rocketman', 'foo_rocket'),
+    ('cine_osprey', 'v_osprey'),
+    ('e_r9_tt_informant', 'triad_informant'),
+    ('_dnl_', 'dnl1'),              # Dr. No lackeys (story levels)
+    ('_spc_', 'spectre_guard'),     # Spectre guards (Volcano Lair)
+    ('_tt_', 'triad_thug'),         # Triad thugs (Hong Kong)
+    ('e_gfe_', 'dnl1'),             # story guards (Fort Knox / Auric / Crab Key)
+    ('e_guards_', 'dnl1'),
+    ('e_vtm', 'spectre_guard'),     # multiplayer enemies
+]
+
 # Templates that place different models depending on the instance name.
 VARIABLE_W1 = {
     0x8960a32f: 'decoration',      # "No Collision": bkd_*, zip_line*, airlock, ...
@@ -150,8 +187,13 @@ def builtin(w1, name, index, is_ai=False):
         stem = W1_MODEL[w1]
         return (stem, 'builtin') if stem in index else (None, None)
     if is_ai:
-        # Enemy appearance comes from the AI template record, not the spawn
-        # name.  Only explicit overrides above are trusted.
+        stem = AI_W1_MODEL.get(w1)
+        if stem and stem in index:
+            return stem, 'builtin'
+        low = str(name).lower()
+        for pattern, stem in AI_NAME_MODEL:
+            if pattern in low and stem in index:
+                return stem, 'ai-name'
         return None, None
     hint = NAME_HINTS.get(_key(name))
     if hint and hint in index:

@@ -168,6 +168,17 @@ def load_chr(path):
 
 
 # ---------------------------------------------------------------- templates
+def _hash_to_name(names):
+    """{java31(name.upper()): name} for a list of resource names."""
+    out = {}
+    for nm in names:
+        h = 0
+        for c in nm.upper():
+            h = (h * 31 + ord(c)) & 0xffffffff
+        out.setdefault(h, nm)
+    return out
+
+
 def _crt_entries(crt, lvl_ai_names=()):
     str_off = None
     m = re.search(rb'Barrel\x00', crt)
@@ -189,10 +200,18 @@ def _crt_entries(crt, lvl_ai_names=()):
         if a in (9, 0x0b):
             (a9 if a == 9 else ab).append((h, b))
         off += 16
+    ai_by_hash = _hash_to_name(list(lvl_ai_names) + names)
     for i, (h, _b) in enumerate(a9):
         yield h, names[i] if i < len(names) else 'object template %08x' % h
     for i, h in enumerate(ab):
-        yield h, lvl_ai_names[i] if i < len(lvl_ai_names) else 'AI template %08x' % h
+        # The AI NEO AGENT names are spawn names, not template names: matching
+        # them positionally gives 0/95 hash matches.  Several templates are
+        # named in Global.LVL Resource Templates (e.g. P90 Example) or in the
+        # CRT string table (Goldfinger, Oddjob, ...), so resolve by hash first.
+        nm = ai_by_hash.get(h)
+        if nm is None and i < len(lvl_ai_names):
+            nm = lvl_ai_names[i]
+        yield h, nm or ('AI template %08x' % h)
 
 
 def load_template_names(crt_path, lvl_path=None):
@@ -222,6 +241,10 @@ def load_template_details(crt_path, lvl_path=None):
             if cur is not None:
                 body.setdefault(cur, []).append(part)
         ai_names = re.findall(r'"([^"]+)"', ''.join(body.get('AI NEO AGENT', [])))
+        all_lvl_names = [nm for parts in body.values()
+                         for nm in re.findall(r'"([^"]+)"', ''.join(parts))]
+    else:
+        all_lvl_names = []
     str_off = None
     m = re.search(rb'Barrel\x00', crt)
     if m:
@@ -244,9 +267,14 @@ def load_template_details(crt_path, lvl_path=None):
     for i, h in enumerate(a9):
         out.append(dict(w1=h, name=names[i] if i < len(names) else 'object template %08x' % h,
                         kind='object'))
+    ai_by_hash = _hash_to_name(all_lvl_names + list(ai_names) + names)
     for i, h in enumerate(ab):
-        out.append(dict(w1=h, name=ai_names[i] if i < len(ai_names) else 'AI template %08x' % h,
-                        kind='ai'))
+        # See _crt_entries: AI NEO AGENT is a spawn-name list (0/95 hash
+        # matches); prefer a hash-verified template name.
+        nm = ai_by_hash.get(h)
+        if nm is None and i < len(ai_names):
+            nm = ai_names[i]
+        out.append(dict(w1=h, name=nm or ('AI template %08x' % h), kind='ai'))
     return out
 
 
