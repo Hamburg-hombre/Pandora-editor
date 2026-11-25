@@ -27,13 +27,17 @@ from objects_lp import CodeStrings
 ARITY = {0: 1, 1: 2, 2: 1, 3: 2, 4: 3, 5: 2, 6: 1, 7: 2,
          0x10000: 1, 0x10001: 1, 0x10002: 3, 0x10003: 1,
          0x20000: 2, 0x20001: 1, 0x20002: 1, 0x20004: 1, 0x20005: 0,
-         0x20007: 1, 0x20008: 1, 0x20009: 1, 0x30000: 2, 0x30001: 0}
-OPNAME = {0: 'STR', 1: 'CALL1', 2: 'UNK2', 3: 'SETPROP', 4: 'TIMER', 5: 'DELAY5',
-          6: 'JUMP6', 7: 'UNK7', 0x10000: 'IF_A', 0x10001: 'IF_B',
-          0x10002: 'IF_C', 0x10003: 'IF_D', 0x20000: 'USE_STR',
-          0x20001: 'EVENT', 0x20002: 'E2', 0x20004: 'E4', 0x20005: 'E5',
-          0x20007: 'E7', 0x20008: 'E8', 0x20009: 'E9',
-          0x30000: 'F0', 0x30001: 'F1'}
+         0x20007: 1, 0x20008: 1, 0x20009: 1, 0x30000: 1, 0x30001: 0}
+# Names reflect the semantics established in 2026-11-24 (see NSLBC_Format.md).
+# 0x30000 takes ONE operand: the following 0x30001 is a separate opcode.
+OPNAME = {0: 'STR', 1: 'CALL1', 2: 'ACTION', 3: 'SETPROP', 4: 'TIMER',
+          5: 'KILL_AT', 6: 'STATE', 7: 'ACTION_AT',
+          0x10000: 'CFG_BEGIN', 0x10001: 'CFG_APPLY',
+          0x10002: 'CFG_FOGPARAM', 0x10003: 'CFG_FOGCOL',
+          0x20000: 'USE_STR', 0x20001: 'EVENT', 0x20002: 'FX_START',
+          0x20004: 'LEVEL_ID', 0x20005: 'CFG_END',
+          0x20007: 'SND_AMBIENT', 0x20008: 'SND_PLAY', 0x20009: 'SND_STOP',
+          0x30000: 'FLAG', 0x30001: 'FLAG_END'}
 
 CALLBACKS = {}
 for nm in ('ONSTARTUP', 'ONDEATH', 'ONACTION', 'ONGAMESTARTUP', 'ONOPEN', 'ONCLOSE',
@@ -48,12 +52,28 @@ for nm in ('ONSTARTUP', 'ONDEATH', 'ONACTION', 'ONGAMESTARTUP', 'ONOPEN', 'ONCLO
     CALLBACKS[java31(nm)] = nm
 
 HASHNAMES = dict(CALLBACKS)
+# Cracked 2026-11-24: java31 of the uppercase name, verified by co-occurring debug
+# strings / SETPROP enum values.  These win over the older name file (which has a
+# few accidental collisions from brute-forcing length >= 6).
+CRACKED = {
+    0x000008E8: 'GO', 0x942B571C: 'TURNON', 0xF13F8BB2: 'TURNOFF',
+    0x9195D11C: 'SETFOG', 0x4434C682: 'ONTIMEOUT', 0x436C8638: 'LEVELOVER',
+    0x88B4A252: 'BEHAVIOR', 0x73A03716: 'ASLEEP', 0x8C3F164C: 'PATROL',
+    0x002237D4: 'IDLE', 0x6C4356E1: 'RETRACT', 0x4CA8E844: 'DEADHEAD',
+    0x7A297B87: 'ENDCUT', 0x94464923: 'TWOWAY', 0xC0995E45: 'GRENADE_EXP1',
+    0x2C79E36F: 'WHITEBLAST', 0xF245B8CB: 'CLEARROOMS',
+    0xD8FE0306: 'DISABLE_SAILSMAN5',
+    0x95411E2F: 'DT_FLAMES', 0x8E9FAE8C: 'DT_BORING',
+    0x3551F32A: 'DT_TRAPDOOR', 0x273C466F: 'STARTTRAP',
+    0x86290352: 'LOCATE', 0x0021C73A: 'HELI',
+}
 crack = os.path.join(HERE, 'nslbc_names.txt')
 if os.path.isfile(crack):
     for line in open(crack, encoding='utf-8', errors='replace'):
         m = re.match(r'([0-9a-f]{8}) (\S+)\s+\d+:', line)
         if m:
             HASHNAMES.setdefault(int(m.group(1), 16), m.group(2))
+HASHNAMES.update(CRACKED)
 
 
 def load_names(work, lvl):

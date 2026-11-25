@@ -49,6 +49,11 @@ list - matching it positionally to the kind-11 hashes gives 0/95 hash matches.
 objects_lp.py now resolves template names by hash against all Global.LVL
 sections and the CRT string table (e.g. P90 Example, Goldfinger) instead.
 
+Fog colour is read from the level's Script.NSLBC (nslbc_fog.py) when a level opens
+and shown in the Environment dialog with its source offset; picking a colour there
+overrides it. Fog near/far, sky background and lighting are still manual because the
+game stores no per-level values for them in the extracted files.
+
 If a model is missing or wrong, pick the correct one in the Properties panel;
 overrides are saved in viewer3d_data\_viewer3d_overrides.json (next to
 pandora_editor.py) and always win.

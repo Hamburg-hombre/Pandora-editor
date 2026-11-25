@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QButtonGroup, QMainWindow, QWidget, QDockWidget, 
 from viewer3d_gl import GLView, marker_kind, KIND_COLORS
 import viewer3d_scene_data as sd
 import viewer3d_paths as vpaths
+import nslbc_fog as nf
 
 PANDORA_QSS = '''
 QToolButton, QPushButton { color:black; background:#f0f0f0; border:1px solid #7a7a7a; padding:2px 8px; min-height:18px; }
@@ -189,9 +190,20 @@ class EnvDialog(QDialog):
         self.ff = self._spin(env.fog_far, 1, 100000, 10)
         form.addRow('Fog near', self.fn)
         form.addRow('Fog far', self.ff)
-        note = QLabel('The in-game sky / fog / light values are not decoded yet, so these are manual\n'
-                      '(they are saved per work folder). Lighting is switched on in View > Lighting.')
+        src = getattr(env, 'fog_source', '') or 'none found'
+        label = 'Game fog (Script.NSLBC): ' + src
+        if getattr(env, 'fog_params', None):
+            label += '  params ' + '/'.join(str(v) for v in env.fog_params)
+        self.fog_src = QLabel(label)
+        self.fog_src.setStyleSheet('color:#406080')
+        self.fog_src.setWordWrap(True)
+        form.addRow(self.fog_src)
+        note = QLabel('Fog colour is read automatically from the level script when available; picking a '
+                      'fog colour here overrides it. Sky background and directional light are still '
+                      'manual (saved per work folder). Fog near/far are manual: the script stores the '
+                      'game values but their exact mapping is not confirmed yet.')
         note.setStyleSheet('color:#606060')
+        note.setWordWrap(True)
         form.addRow(note)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
@@ -224,7 +236,11 @@ class EnvDialog(QDialog):
 
     def apply(self):
         e = self.env
-        e.clear, e.fog_col = self.btn_clear._rgb, self.btn_fog._rgb
+        e.clear = self.btn_clear._rgb
+        e.fog_col = self.btn_fog._rgb
+        e.fog_source = getattr(e, 'fog_source', '') or ''
+        if getattr(e, 'game_fog_col', None) and e.fog_col != e.game_fog_col:
+            e.fog_source = 'manual'          # do not overwrite this on the next level load
         e.ambient, e.light_col = self.amb.value(), self.lcol.value()
         e.light_dir = tuple(s.value() for s in self.ld)
         e.fog_near, e.fog_far = self.fn.value(), self.ff.value()
@@ -609,6 +625,17 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
                 self._fill_level_menu()
+            # Prefill the level's authored fog colour from Script.NSLBC, unless the
+            # user has explicitly picked one in the Environment dialog.
+            fog = nf.level_fog(work, name)
+            env = self.view.env
+            if getattr(env, 'fog_source', '') not in ('', 'manual'):
+                env.fog_source = ''          # stale value from the previously open level
+            env.game_fog_col = fog['rgb'] if fog else None
+            env.fog_params = fog['params'] if fog else None
+            if fog and getattr(env, 'fog_source', '') != 'manual':
+                env.fog_col = fog['rgb']
+                env.fog_source = fog['source']
             lv = sd.Level.load(work, name, self.model_cache)
             self.view.attach_model_cache(self.model_cache)
             self.level_name = name

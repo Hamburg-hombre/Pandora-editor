@@ -33,11 +33,15 @@ Level room boxes (Global.ROO)
 The game only tests collision inside the room the player is in, and each room's extent is
 stored in the level's Global.ROO.  Growing a .CVHM past that box makes the new part
 unreachable, so generate_from_obj / the GUI can grow the box as well (see Roo below).
+The portal graph after the room records is decoded too: 2 endpoints per door plus u32
+links of (roomIndex << 16) | portalIndex; the room tag's high byte is its door count.
 
 CLI
     python collision.py info   <file.cvhm>
+    python collision.py roo    <Global.ROO>       # rooms + decoded portals
     python collision.py export <file.cvhm|folder> <out_dir>
 """
+import collections
 import math
 import os
 import struct
@@ -46,6 +50,11 @@ MAGIC_V1 = 0xCCCC0104
 MAGIC_V2 = 0xCCCC0204
 SCALE = 4096.0
 INF = 1 << 30
+# The triangle attribute is a u16, but only two values occur in all 167 retail files:
+# 0x0000 and 0x8000.  It is therefore a single boolean bit.  Its exact in-game meaning
+# is still unknown (flagged tris are mostly vertical and have balanced winding, unlike
+# the inward-facing majority of unflagged tris).  Never guess a label in UI/docs.
+CVHM_FLAG_BIT15 = 0x8000
 
 
 class CollisionError(Exception):
@@ -115,6 +124,21 @@ class Collision:
 
     def names(self):
         return [m.name for m in self.meshes]
+
+    def flag_counts(self):
+        """Counter of triangle attribute values across every mesh."""
+        counts = collections.Counter()
+        for m in self.meshes:
+            counts.update(m.attrs)
+        return counts
+
+    def flagged_triangles(self):
+        """Readable summary of the per-triangle attribute bit (semantics unknown)."""
+        counts = self.flag_counts()
+        total = sum(counts.values())
+        return ', '.join('%s: %d' % (
+            '0x%04x' % flag if flag else '0', n) for flag, n in sorted(counts.items())) + (
+            ' (bit 15 set: %d/%d)' % (counts.get(CVHM_FLAG_BIT15, 0), total) if total else '')
 
     def write(self, path=None):
         path = path or self.path
@@ -520,6 +544,11 @@ def generate_from_obj(obj_path, target_path=None, mode='auto', offset=(0.0, 0.0,
 ROO_VERSION = 4
 ROO_RECORD = 0x20
 ROO_RECORD_SIZE = 0x20
+# After the room records come two fully decoded tables (verified on all 18 levels):
+#   countA portals: 2 x 12.12 xyz (the two doorway ends) + one u32 (always 0 in retail)
+#   countB = 2 * countA u32 links: (roomIndex << 16) | portalIndex, two per portal
+ROO_PORTAL_SIZE = 28
+ROO_PORTAL_LINK_SHIFT = 16
 
 
 def _roo_fixed(v):
@@ -608,6 +637,60 @@ class Roo:
                                'box': [_roo_unfixed(v) for v in raw]})
         for room, nm in zip(self.rooms, _roo_names(data, [t & 0xFFFF for t in tags])):
             room['name'] = nm
+        self.portals = self._read_portals(data, nr, self.counts[0], self.counts[1])
+        # The room tag's high byte is the number of portals touching that room:
+        # tag = (portalCount << 24) | nameOffset, i.e. flags == portalCount << 8.
+        # Verified on all 167 rooms of the 18 retail levels.
+        for room in self.rooms:
+            room['portal_count'] = room['flags'] >> 8
+            room['portal_indices'] = [p['index'] for p in self.portals
+                                      if room['index'] in p['rooms']]
+
+    def _read_portals(self, data, nr, count_a, count_b):
+        """Decode the door/portal graph stored after the room records.
+
+        Returns a list of portals, each with the two 12.12 endpoints (raw and world
+        space), the two room indices it connects, the reserved word and its offset.
+        Corrupt/truncated tables are ignored rather than breaking box editing.
+        """
+        # room 0's box is in the header, so the records end at 0x08 + 0x20*N
+        off = 0x08 + ROO_RECORD_SIZE * nr
+        if count_a < 0 or count_b < 0 or off + count_a * ROO_PORTAL_SIZE + count_b * 4 > len(data):
+            return []
+        portals = []
+        for g in range(count_a):
+            pts = list(struct.unpack_from('<6i', data, off))
+            reserved = struct.unpack_from('<I', data, off + 24)[0]
+            portals.append({'index': g, 'record_offset': off,
+                            'points': [tuple(pts[0:3]), tuple(pts[3:6])],
+                            'world': [tuple(v / SCALE for v in pts[0:3]),
+                                      tuple(v / SCALE for v in pts[3:6])],
+                            'rooms': [], 'reserved': reserved})
+            off += ROO_PORTAL_SIZE
+        links = struct.unpack_from('<%dI' % count_b, data, off) if count_b else ()
+        for link in links:
+            portal = link & 0xFFFF
+            room = link >> ROO_PORTAL_LINK_SHIFT
+            if 0 <= portal < len(portals) and 0 <= room < nr:
+                portals[portal]['rooms'].append(room)
+        return portals
+
+    def portal_descriptions(self):
+        """One readable line per portal, for the info panel / tooling.
+
+        The two endpoints sit on the shared face of the two rooms, so the link
+        table is treated as an unordered connection rather than one room per end.
+        """
+        out = []
+        for p in self.portals:
+            ends = ['(%.2f, %.2f, %.2f)' % xyz for xyz in p['world']]
+            rooms = []
+            for room in p['rooms']:
+                name = self.rooms[room]['name'] if 0 <= room < len(self.rooms) else ''
+                rooms.append('%d%s' % (room, ' %s' % name if name else ''))
+            out.append('portal %2d: %s  <->  %s   [%s]' %
+                       (p['index'], ends[0], ends[1], ', '.join(rooms) or 'no link'))
+        return out
 
     def to_bytes(self):
         return bytes(self.data)
@@ -764,6 +847,16 @@ if __name__ == '__main__':
     cmd, src = sys.argv[1], sys.argv[2]
     if cmd == 'info':
         _print_info(parse(src))
+    elif cmd == 'roo':
+        r = Roo(open(src, 'rb').read(), src)
+        print('%s  v%d, %d rooms, %d portals' %
+              (src, r.version, r.room_count, len(r.portals)))
+        for room in r.rooms:
+            print('  room %2d %-16s doors=%d box=%s' %
+                  (room['index'], room['name'] or '(unnamed)', room['portal_count'],
+                   _fmt_box(room['box'])))
+        for line in r.portal_descriptions():
+            print('  ' + line)
     elif cmd == 'export':
         out = sys.argv[3] if len(sys.argv) > 3 else 'collision_obj'
         files = [src] if os.path.isfile(src) else []

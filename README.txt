@@ -74,6 +74,9 @@ Collision (Model tab, .cvhm files)
   Levels/... each level folder has .CVHM files next to its .nsbmd models. They hold the simple
   collision geometry the player walks into. Select one to see it in the 3D view; the info line
   shows its mesh names, vertices and triangles.
+  The info line reports the per-triangle attribute bit (0x8000, the only flag value the game uses);
+  "Highlight flag bit 15" colours those triangles pink. This is a real but not yet understood
+  surface flag - the tool shows the raw bit rather than guessing what it does in game.
   Export collision OBJ...          saves the collision mesh as an OBJ, in the same world coordinates
                                    as an exported .nsbmd. One object per internal mesh.
   Generate collision from OBJ...   rebuilds the selected .CVHM from any OBJ (triangulated fan), welds
@@ -112,12 +115,14 @@ Rooms (Rooms tab, Global.ROO)
     drag = rotate, right-drag = pan, wheel = zoom.
   - Picking a room centres the view on that room's box; the rotation and zoom stay exactly as they
     were, so you can compare rooms at the same angle and distance.
-  - The table lists every room with its flags and Min/Max X/Y/Z. Pick a room (or double-click a row),
+  - The table lists every room with its flags, decoded door count and Min/Max X/Y/Z. Pick a room (or double-click a row),
     edit the six values under the table and click "Apply box and save".
   - Apply writes the file straight away; the first change keeps the original under
     <work folder>/_backup, and "Revert file to original" restores it. Room names and flags are not
     touched.
-  - "Zoom to room" frames one box, "Show all rooms" returns to the whole level.
+  - "Zoom to room" frames one box, "Show all rooms" returns to the whole level. The middle pane
+    lists the decoded door/portal graph (each door's two ends and the rooms it connects);
+    pink markers in the view show where the doors are. Portals are read-only.
   - Make a box at least as big as the walkable part of the room. Growing a box is always safe;
     shrinking it can make collision stop working in that room.
   - Repack the ROM to test it.
@@ -215,8 +220,12 @@ Data tab (.char, .plt, .ico, .crt, .nsbca, .nsbma, .nsbta, .nsbtp, .nslbc, .tex,
     and the info panel lists the callback blocks and disassembles their first instructions into
     readable operations (e.g. TIMER, SETPROP COLLIDE, USE_STR "dWhiteToRed", STR "message").
     Full disassembly: "python nslbc_dis.py <work> <level>". See documentation/NSLBC_Format.md.
-    Operation semantics of a few opcode families and ~1000 name hashes remain unknown; patch
-    bytes with care (changing code/string sizes requires fixing callback offsets).
+    Opcode families are now named for what they do (ACTION, STATE, ACTION_AT, TIMER,
+    SND_PLAY/SND_STOP, CFG_*, FLAG/FLAG_END) and ~30 more name hashes are resolved
+    (TURNON, TURNOFF, GO, BEHAVIOR, ASLEEP, SETFOG, GRENADE_EXP1, ...). The level's
+    fog colour is decoded by nslbc_fog.py and pre-filled in the 3D viewer's Environment
+    dialog. Many other hashes and precise in-game effects are still unknown; patch bytes
+    with care (changing code/string sizes requires fixing callback offsets).
   - ".tex" (Menus/menu.tex) is a bank of 122 LZSS-compressed, palettised 8-bpp images. The Preview
     tab shows the images one at a time: use the ◀ Prev / Next ▶ buttons or the Left/Right arrow
     keys (when the Data tab's Preview page is active) to browse, and "Save this PNG..." to keep

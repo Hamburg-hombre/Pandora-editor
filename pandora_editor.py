@@ -224,8 +224,12 @@ def _camera(center, radius, yaw, pitch, zoom, w, h):
     return tf, screen
 
 
-def project(tris, center, radius, yaw, pitch, zoom, w, h, step=1):
-    """Return [(depth, [x1,y1,x2,y2,x3,y3], shade 0..1)] sorted far -> near."""
+def project(tris, center, radius, yaw, pitch, zoom, w, h, step=1, attrs=None):
+    """Return [(depth, [x1,y1,x2,y2,x3,y3], shade 0..1[, attr])] sorted far -> near.
+
+    When `attrs` is given (one entry per triangle), each tuple gets the matching
+    attribute appended as a 4th element, so callers can colour-code triangle flags.
+    """
     tf, screen = _camera(center, radius, yaw, pitch, zoom, w, h)
 
     out = []
@@ -239,7 +243,10 @@ def project(tris, center, radius, yaw, pitch, zoom, w, h, step=1):
         pts = []
         for p in (a, b, c):
             pts += list(screen(p))
-        out.append(((a[2] + b[2] + c[2]) / 3, pts, shade))
+        item = ((a[2] + b[2] + c[2]) / 3, pts, shade)
+        if attrs is not None:
+            item += (attrs[i],)
+        out.append(item)
     out.sort(key=lambda t: t[0])
     return out
 
@@ -497,6 +504,8 @@ if tk is not None:
             self.busy = False
             self.loaded = None
             self.collision = None
+            self.view_attrs = []                   # .CVHM triangle flags, aligned with view_tris
+            self.hi_flags = tk.BooleanVar(value=False)
             self.roo = None
             self.roo_room = None
             self.roo_base_view = None
@@ -671,6 +680,8 @@ if tk is not None:
                        command=self.do_generate_collision).pack(side='left', padx=4)
             ttk.Label(cb, text='(.CVHM files - collision geometry lives in level space)',
                       foreground='gray').pack(side='left', padx=8)
+            ttk.Checkbutton(cb, text='Highlight flag bit 15', variable=self.hi_flags,
+                            command=self.redraw).pack(side='left', padx=(8, 0))
             self.canvas = tk.Canvas(mt, background='#202428', highlightthickness=0)
             self.canvas.pack(fill='both', expand=True)
             self.canvas.bind('<ButtonPress-1>', self.on_press)
@@ -747,9 +758,9 @@ if tk is not None:
             rf.pack(fill='both', expand=True)
             tablef = ttk.Frame(rf)
             rf.add(tablef, weight=3)
-            cols = ('idx', 'name', 'flags', 'x0', 'y0', 'z0', 'x1', 'y1', 'z1', 'size')
-            heads = ('#', 'room', 'flags', 'min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z', 'size (X x Y x Z)')
-            widths = (34, 130, 52, 66, 66, 66, 66, 66, 66, 150)
+            cols = ('idx', 'name', 'flags', 'doors', 'x0', 'y0', 'z0', 'x1', 'y1', 'z1', 'size')
+            heads = ('#', 'room', 'flags', 'doors', 'min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z', 'size (X x Y x Z)')
+            widths = (34, 130, 52, 52, 66, 66, 66, 66, 66, 66, 150)
             self.room_tree = ttk.Treeview(tablef, columns=cols, show='headings', selectmode='browse', height=8)
             for c, hd, wd in zip(cols, heads, widths):
                 self.room_tree.heading(c, text=hd)
@@ -760,6 +771,21 @@ if tk is not None:
             rsb.pack(side='right', fill='y')
             self.room_tree.bind('<<TreeviewSelect>>', self.on_room_select)
             self.room_entries = []
+            portalf = ttk.Frame(rf)
+            rf.add(portalf, weight=1)
+            pcols = ('idx', 'rooms', 'a', 'b', 'c', 'd', 'e', 'f')
+            pheads = ('#', 'connects', 'x0', 'y0', 'z0', 'x1', 'y1', 'z1')
+            self.portal_tree = ttk.Treeview(portalf, columns=pcols, show='headings',
+                                            selectmode='browse', height=4)
+            for col, hd in zip(pcols, pheads):
+                self.portal_tree.heading(col, text=hd)
+                self.portal_tree.column(col, width=46 if col == 'idx' else 86,
+                                        stretch=(col == 'rooms'),
+                                        anchor='w' if col == 'rooms' else 'center')
+            psb = ttk.Scrollbar(portalf, command=self.portal_tree.yview)
+            self.portal_tree.configure(yscrollcommand=psb.set)
+            self.portal_tree.pack(side='left', fill='both', expand=True)
+            psb.pack(side='right', fill='y')
             viewf = ttk.Frame(rf)
             rf.add(viewf, weight=2)
             self.room_canvas = tk.Canvas(viewf, background='#202428', highlightthickness=0, height=230)
@@ -1500,10 +1526,12 @@ if tk is not None:
                 for v in self.lp_box_vars:
                     v.set('')
             self.room_tree.delete(*self.room_tree.get_children())
+            self.portal_tree.delete(*self.portal_tree.get_children())
             self.rooms_hint.set('Open a level\'s Global.ROO in the list on the left to see and edit its room boxes.')
             for v in self.room_vars:
                 v.set('')
             self.view_tris = []
+            self.view_attrs = []
             self.stop_animation(quiet=True)
             self._last_tex = None
             self.canvas.delete('all')
@@ -1560,12 +1588,14 @@ if tk is not None:
                     return
                 self.collision = col
                 self.view_tris = col.triangles()
+                self.view_attrs = [f for m in col.meshes for f in m.attrs]
                 self.view = bounds(self.view_tris)
                 self.base_view = self.view
                 parts = ', '.join('%s: %d verts / %d tris' % (m.name, len(m.verts), len(m.tris))
                                   for m in col.meshes)
-                self.info.set('%s  -  collision v%d, %d triangle(s)  -  %s'
-                              % (name, col.version, len(self.view_tris), parts))
+                self.info.set('%s  -  collision v%d, %d triangle(s)  -  %s  -  flags %s'
+                              % (name, col.version, len(self.view_tris), parts,
+                                 col.flagged_triangles()))
                 self.nb.select(0)
                 self.reset_view()
                 return
@@ -1592,9 +1622,10 @@ if tk is not None:
                 self.rooms_hint.set(
                     '%s: %d room box(es). Pick a room, then edit its Min/Max values below. The game only '
                     'runs collision inside the room the player is in, so each box has to contain the '
-                    'walkable area of that room.' % (name, roo.room_count))
-                self.info.set('%s  -  %d room box(es), room table version %d'
-                              % (name, roo.room_count, roo.version))
+                    'walkable area of that room. The pink markers are the decoded door/portal graph.'
+                    % (name, roo.room_count))
+                self.info.set('%s  -  %d room box(es), %d portal(s), room table version %d'
+                              % (name, roo.room_count, len(roo.portals), roo.version))
                 self.nb.select(3)
                 self.reset_view()
                 return
@@ -2668,13 +2699,22 @@ if tk is not None:
         def fill_rooms(self):
             tree = self.room_tree
             tree.delete(*tree.get_children())
+            pt = self.portal_tree
+            pt.delete(*pt.get_children())
             roo = self.roo
             if not roo:
                 return
+            for p in roo.portals:
+                rooms = ' <-> '.join(str(r) for r in p['rooms']) or '-'
+                pt.insert('', 'end', iid='p%d' % p['index'], values=(
+                    p['index'], rooms,
+                    '%.2f' % p['world'][0][0], '%.2f' % p['world'][0][1], '%.2f' % p['world'][0][2],
+                    '%.2f' % p['world'][1][0], '%.2f' % p['world'][1][1], '%.2f' % p['world'][1][2]))
             for room in roo.rooms:
                 b = room['box']
                 tree.insert('', 'end', iid=str(room['index']), values=(
                     room['index'], room['name'] or '(unnamed)', '0x%03x' % room['flags'],
+                    room['portal_count'],
                     '%.2f' % b[0], '%.2f' % b[1], '%.2f' % b[2],
                     '%.2f' % b[3], '%.2f' % b[4], '%.2f' % b[5],
                     '%.1f x %.1f x %.1f' % (b[3] - b[0], b[4] - b[1], b[5] - b[2])))
@@ -3869,12 +3909,18 @@ if tk is not None:
             step = max(1, len(tris) // 2500) if fast else 1
             center, radius = self.view
             solid = self.solid.get() and len(tris) <= 12000
-            for _d, pts, shade in project(tris, center, radius, self.yaw, self.pitch, self.zoom, w, h, step):
+            attrs = (self.view_attrs if self.hi_flags.get() and
+                     len(self.view_attrs) == len(tris) and not self.anim_tris else None)
+            for item in project(tris, center, radius, self.yaw, self.pitch, self.zoom,
+                                w, h, step, attrs=attrs):
+                _d, pts, shade = item[:3]
+                flagged = bool(item[3] & collision.CVHM_FLAG_BIT15) if attrs is not None else False
                 if solid:
                     g = int(60 + 180 * min(1.0, shade))
-                    c.create_polygon(pts, fill='#%02x%02x%02x' % (g, g, min(255, g + 12)), outline='')
+                    c.create_polygon(pts, fill='#ff9de2' if flagged else
+                                     '#%02x%02x%02x' % (g, g, min(255, g + 12)), outline='')
                 else:
-                    c.create_polygon(pts, fill='', outline='#8fd0ff')
+                    c.create_polygon(pts, fill='', outline='#ff9de2' if flagged else '#8fd0ff')
 
         def _draw_rooms(self, c, w, h):
             """Wireframe of every room box of a Global.ROO, the selected one highlighted."""
@@ -3903,9 +3949,20 @@ if tk is not None:
                         sx, sy = screen(tf(mid))
                         c.create_text(sx, sy, text=room['name'], fill=color, font=('TkDefaultFont', 8),
                                       anchor='center')
-            c.create_text(8, max(8, h - 8), anchor='sw', fill='#9fb2c4', font=('TkDefaultFont', 8), text=(
-                'room boxes: yellow = selected, blue = others   -   drag = rotate, '
-                'right-drag = pan, wheel = zoom'))
+            has_portals = False
+            for p in roo.portals:
+                a, b = p['world']
+                xa, ya = screen(tf(a))
+                xb, yb = screen(tf(b))
+                c.create_line(xa, ya, xb, yb, fill='#ff7ad9', width=2)
+                c.create_oval(xa - 3, ya - 3, xa + 3, ya + 3, fill='#ff7ad9', outline='')
+                c.create_oval(xb - 3, yb - 3, xb + 3, yb + 3, fill='#ff7ad9', outline='')
+                has_portals = True
+            hint = 'room boxes: yellow = selected, blue = others'
+            if has_portals:
+                hint += ', pink = portals'
+            c.create_text(8, max(8, h - 8), anchor='sw', fill='#9fb2c4', font=('TkDefaultFont', 8),
+                          text=hint + '   -   drag = rotate, right-drag = pan, wheel = zoom')
 
         # ------------------------------------------------------------ texture view
         def _current_tex(self):

@@ -90,6 +90,11 @@ class Env:
         self.fog_col = (0.55, 0.62, 0.7)
         self.fog_near = 80.0
         self.fog_far = 400.0
+        # Decoded from the level's Script.NSLBC when available (nslbc_fog.py).
+        # 'manual' means the user picked a colour and overrides the game value.
+        self.game_fog_col = None
+        self.fog_source = ''
+        self.fog_params = None
 
     def to_dict(self):
         return dict(self.__dict__)
