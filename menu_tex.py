@@ -126,14 +126,22 @@ def guess_width(n, rec=None, preferred=(64, 128, 192, 256, 320, 384, 512, 160, 3
         for ht in (192, 128):
             if n % ht == 0 and n // ht >= 64:
                 return n // ht, ht
-    for w in preferred:
-        h = n // w if n % w == 0 else 0
-        if h and h % 8 == 0 and 1/4 <= w/h <= 4:
-            return w, h
-    for w in range(8, 1025, 8):
-        h = n // w if n % w == 0 else 0
-        if h and h % 8 == 0 and 1/4 <= w/h <= 4 and w >= 64:
-            return w, h
+    # No tilemap: pick the most square valid 8x8-tile grid.  A 1024-byte icon
+    # is 32x32 (one square icon), not 64x16 (two squashed copies).
+    import math
+    cands = []
+    for w in range(8, int(math.isqrt(n)) + 1, 8):
+        if n % w:
+            continue
+        h = n // w
+        if h % 8 or not (1/4 <= w / h <= 4):
+            continue
+        cands.append((w, h))
+        if w != h:
+            cands.append((h, w))
+    if cands:
+        cands.sort(key=lambda wh: (abs(math.log2(wh[0] / wh[1])), -wh[0]))
+        return cands[0]
     return None, None
 
 def map_size(rec):
