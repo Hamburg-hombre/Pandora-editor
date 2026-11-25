@@ -5,6 +5,9 @@ Files:               keep every viewer3d_*.py next to pandora_editor.py (use the
 Use:                 Pandora > Simple mode > double-click a level name. The same window is reused for the next level.
 Manual start:        python viewer3d_main.py --work <unpacked folder> --level 1_0_FortKnox
 Errors:              viewer3d_error.log next to pandora_editor.py
+Settings:            viewer3d_data\_viewer3d_env.json and _viewer3d_overrides.json
+                     next to pandora_editor.py (old copies in the work folder are
+                     still read, so existing settings are kept).
 
 Object models
 -------------
@@ -47,7 +50,8 @@ objects_lp.py now resolves template names by hash against all Global.LVL
 sections and the CRT string table (e.g. P90 Example, Goldfinger) instead.
 
 If a model is missing or wrong, pick the correct one in the Properties panel;
-overrides are saved in <work>/_viewer3d_overrides.json and always win.
+overrides are saved in viewer3d_data\_viewer3d_overrides.json (next to
+pandora_editor.py) and always win.
 
 viewer3d_scene_data.py  level loading (numpy only, testable without a GPU)
 viewer3d_model_map.py   verified Objects.LP template -> model map (no 3rd-party modules)

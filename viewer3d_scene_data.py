@@ -11,6 +11,7 @@ from scene import MatInfo
 import objects_lp as lpmod
 import collision as colmod
 import viewer3d_model_map as model_map
+import viewer3d_paths as vpaths
 
 FILE_TYPES = ('nsbmd', 'cvhm', 'roo', 'lp', 'nsbtx')
 
@@ -170,7 +171,7 @@ class ModelResolver:
                     if f.lower().endswith('.nsbmd'):
                         self.index[os.path.splitext(f)[0].lower()] = os.path.join(d, f)
         self.by_name, self.by_w1 = {}, {}
-        p = os.path.join(work, self.OVERRIDES)
+        p = vpaths.read_path(self.OVERRIDES, work)
         if os.path.isfile(p):
             try:
                 j = json.load(open(p))
@@ -181,7 +182,7 @@ class ModelResolver:
         self.auto_w1 = {}
 
     def save_overrides(self):
-        with open(os.path.join(self.work, self.OVERRIDES), 'w') as f:
+        with open(vpaths.save_path(self.OVERRIDES), 'w') as f:
             json.dump({'by_name': self.by_name, 'by_w1': self.by_w1}, f, indent=1, sort_keys=True)
 
     @staticmethod

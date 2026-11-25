@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QButtonGroup, QMainWindow, QWidget, QDockWidget, 
 
 from viewer3d_gl import GLView, marker_kind, KIND_COLORS
 import viewer3d_scene_data as sd
+import viewer3d_paths as vpaths
 
 PANDORA_QSS = '''
 QToolButton, QPushButton { color:black; background:#f0f0f0; border:1px solid #7a7a7a; padding:2px 8px; min-height:18px; }
@@ -561,11 +562,15 @@ class MainWindow(QMainWindow):
             self._save_env()
             self.view.update()
 
-    def _env_path(self):
-        return os.path.join(self.work, '_viewer3d_env.json') if self.work else None
+    def _env_path(self, for_save=False):
+        if not self.work:
+            return None
+        if for_save:
+            return vpaths.save_path('_viewer3d_env.json')
+        return vpaths.read_path('_viewer3d_env.json', self.work)
 
     def _save_env(self):
-        p = self._env_path()
+        p = self._env_path(for_save=True)
         if p:
             try:
                 d = self.view.env.to_dict()
