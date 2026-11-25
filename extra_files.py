@@ -581,9 +581,9 @@ def describe_tex(path, data):
     lines.append('')
     lines.append('  #  offset     compressed  raw bytes  pad  palette  indices  guessed size')
     for b in bs[:60]:
-        img = mtex.parse_image(b['payload'])
+        img = mtex.parse_image(b['payload'], b.get('rec'))
         ni = len(img[1]) if img else 0
-        w, h = mtex.guess_width(ni) if img else (None, None)
+        w, h = mtex.guess_width(ni, b.get('rec')) if img else (None, None)
         lines.append(' %3d 0x%07X %9d %10d %3d  %-7s %8s  %s' % (
             b['index'], b['offset'], b['next'] - b['offset'], b['usize'], b['padding'],
             'yes' if img else 'NO', ni,

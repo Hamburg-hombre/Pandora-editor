@@ -179,8 +179,11 @@ Text (Text tab)
   - Only text characters the original file can store are allowed (ASCII for these files).
 
 Data tab (.char, .plt, .ico, .crt, .nsbca, .nsbma, .nsbta, .nsbtp, .nslbc, .tex, credits.bin)
-  Select one of these files in the list on the left. The Data tab opens with a description on the
-  left, a picture preview or byte view on the right, and a byte patch box at the bottom.
+  Switch the file list to Advanced mode and select one of these files. The Data tab opens with a
+  description on the left and three views on the right: Preview, Bytes (hex), and Structured.
+  Structured lists the decoded fields with their byte offsets; select a row, edit its value and
+  press "Apply edit" to change just that field (a backup is kept in _backup, then Repack the ROM).
+  The byte patch box at the bottom remains available for raw edits.
   - ".char" is a 32x32 picture with 16 colours (4 bits per pixel, 8x8 tile order). The colours
     live in the matching ".plt" file. "Save PNG..." exports the preview; "Import PNG..." resizes
     your picture to 32x32, reduces it to 16 colours and rewrites the .char plus its matching .plt
@@ -206,10 +209,13 @@ Data tab (.char, .plt, .ico, .crt, .nsbca, .nsbma, .nsbta, .nsbtp, .nslbc, .tex,
     Full disassembly: "python nslbc_dis.py <work> <level>". See documentation/NSLBC_Format.md.
     Operation semantics of a few opcode families and ~1000 name hashes remain unknown; patch
     bytes with care (changing code/string sizes requires fixing callback offsets).
-  - ".tex" (Menus/menu.tex) is a bank of 122 LZSS-compressed, palettised 8-bpp images. The info
-    panel lists every block with its offset, compressed/raw sizes and guessed dimensions.
-    "Export PNGs..." writes all images to a folder you pick (widths are guessed when not stored).
-    The hex view and patch box still work on the raw bytes.
+  - ".tex" (Menus/menu.tex) is a bank of 122 LZSS-compressed, palettised 8-bpp images. The Preview
+    tab shows the images one at a time: use the ◀ Prev / Next ▶ buttons or the Left/Right arrow
+    keys (when the Data tab's Preview page is active) to browse, and "Save this PNG..." to keep
+    the current image. The "Structured" tab lists every block with its offset, raw size and
+    dimensions taken from menu.bin's block records. The large menu screens are assembled from a
+    8x8 tileset plus a u16 tilemap (32 tiles wide), so the text and background line up correctly.
+    "Export PNGs..." writes them all to a folder. The hex view and patch box still work on raw bytes.
   - "credits.bin" is the end-credits string table (382 strings); the info panel lists them.
   - The "Bytes (hex)" page shows 8 KB at a time. Type an offset (hex) and press Go, or use the
     8 KB page buttons. The view is read-only.

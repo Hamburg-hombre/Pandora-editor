@@ -63,8 +63,30 @@ def lzss_decompress(data, pos, size):
                 out.append(data[src]); src += 1
     return bytes(out), src, "ok" if len(out) == size else "short output"
 
+def load_records(tex_path):
+    """Read Menus/menu.bin: 20-byte records at 0x340 (stride 20).
+
+    Each record is {u32 block_offset, u16 pal_bytes, u16 f3, u16 f4, ...,
+    u16 usize, ...} with `pal_bytes + f3 + f4 == usize`.  f3 is the real
+    index-byte count of the block's main image; f4 is a separate trailing
+    strip (present on the large menu screens, absent on portraits).
+    """
+    recs = {}
+    binpath = os.path.join(os.path.dirname(tex_path), 'menu.bin')
+    if not os.path.isfile(binpath):
+        return recs
+    d = open(binpath, 'rb').read()
+    for s in range(0x340, len(d) - 20 + 1, 20):
+        off = struct.unpack_from('<I', d, s)[0]
+        u = struct.unpack_from('<10H', d, s)
+        if u[2] == 512 and 512 + u[3] + u[4] == u[6]:
+            recs[off] = dict(f3=u[3], f4=u[4], usize=u[6], rec_off=s)
+    return recs
+
+
 def blocks(path):
     data = open(path, "rb").read()
+    recs = load_records(path)
     pos = 0
     index = 0
     while pos + 4 <= len(data):
@@ -78,19 +100,32 @@ def blocks(path):
         if nxt >= len(data):
             nxt = len(data)
         yield dict(index=index, offset=pos, usize=size, payload=payload,
-                   data_end=end, next=nxt, padding=nxt - end)
+                   data_end=end, next=nxt, padding=nxt - end,
+                   rec=recs.get(pos))
         pos = nxt; index += 1
 
-def parse_image(payload):
+def parse_image(payload, rec=None):
     if len(payload) < 512:
         return None
     palette = list(struct.unpack_from("<256H", payload, 0))
-    idx = payload[512:]
+    n = rec["f3"] if rec else len(payload) - 512
+    idx = payload[512:512 + n]
     return palette, idx
 
-def guess_width(n, preferred=(64, 128, 192, 256, 320, 384, 512, 160, 32)):
-    """Widths are not stored in the .tex block.  Return a width only when it
-    gives a plausible image (both dimensions multiples of 8, aspect <= 4:1)."""
+def guess_width(n, rec=None, preferred=(64, 128, 192, 256, 320, 384, 512, 160, 32)):
+    """Return (width, height) for an index count n.
+
+    The large menu screens have their height in the menu.bin record's f4:
+    f3 / 192 (height 192) or, when that does not divide, f3 / 128.  Small
+    portraits/icons fall back to the old assumption (64x64, 64x32, ...).
+    """
+    if rec:
+        ms = map_size(rec)
+        if ms:
+            return ms
+        for ht in (192, 128):
+            if n % ht == 0 and n // ht >= 64:
+                return n // ht, ht
     for w in preferred:
         h = n // w if n % w == 0 else 0
         if h and h % 8 == 0 and 1/4 <= w/h <= 4:
@@ -101,18 +136,56 @@ def guess_width(n, preferred=(64, 128, 192, 256, 320, 384, 512, 160, 32)):
             return w, h
     return None, None
 
+def map_size(rec):
+    """Large blocks have a u16 tilemap: 32 tiles wide (256 px), f4/2/32 rows."""
+    if not rec or not rec.get('f4'):
+        return None
+    rows = rec['f4'] // 2 // 32
+    return 256, rows * 8 if rows else None
+
+
+def render_mapped(payload, rec, palette=None):
+    """Assemble a tileset + u16 tilemap (32 tiles wide) into a PIL Image."""
+    from PIL import Image
+    f3, f4 = rec['f3'], rec['f4']
+    pal = palette if palette is not None else struct.unpack_from('<256H', payload, 0)
+    tileset = payload[512:512 + f3]
+    rows = f4 // 2 // 32
+    if not rows:
+        return None
+    entries = struct.unpack_from('<%dH' % (32 * rows), payload, 512 + f3)
+    ntile = len(tileset) // 64
+    im = Image.new('RGB', (256, rows * 8))
+    px = im.load()
+    for i, t in enumerate(entries):
+        if t >= ntile:
+            continue
+        tx, ty = (i % 32) * 8, (i // 32) * 8
+        tile = tileset[t * 64:(t + 1) * 64]
+        for y in range(8):
+            for x in range(8):
+                px[tx + x, ty + y] = rgb555(pal[tile[y * 8 + x]])
+    return im
+
+
 def rgb555(c):
     return ((c & 31) * 255 // 31, ((c >> 5) & 31) * 255 // 31, ((c >> 10) & 31) * 255 // 31)
 
-def save_png(payload, path, width=None):
+def to_image(payload, width=None, height=None, rec=None):
+    """Decode a block payload to a PIL Image (8x8 tiles detiled)."""
     from PIL import Image
-    pal, idx = parse_image(payload)
+    pal, idx = parse_image(payload, rec)
+    if not pal:
+        return None
+    if rec and rec.get('f4') and width is None:
+        return render_mapped(payload, rec, pal)
     if width is None:
-        width, _ = guess_width(len(idx))
+        width, height = guess_width(len(idx), rec)
     if not width or len(idx) % width:
         return None
-    height = len(idx) // width
-    if width % 8 or height % 8:
+    if height is None:
+        height = len(idx) // width
+    if width < 8 or height < 8:
         return None
     im = Image.new("RGB", (width, height))
     px = im.load()
@@ -123,8 +196,15 @@ def save_png(payload, path, width=None):
                 for x in range(8):
                     v = idx[n]; n += 1
                     px[tx * 8 + x, ty * 8 + y] = rgb555(pal[v])
+    return im
+
+
+def save_png(payload, path, width=None, height=None, rec=None):
+    im = to_image(payload, width, height, rec)
+    if im is None:
+        return None
     im.save(path)
-    return width, height
+    return im.size
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]

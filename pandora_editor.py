@@ -56,6 +56,7 @@ try:
     import nds_unpack, nds_repack, export_models, collision
     import objects_lp as lpmod
     import extra_files
+    import structured_edit
     import sound as soundmod
 except Exception as _e:
     _fatal('Could not load the tool files (%s: %s).\nKeep ALL the .py files from the zip in the same folder.'
@@ -528,6 +529,8 @@ if tk is not None:
             self.data_char_raw = None
             self.data_swatches = []
             self.data_photo = None
+            self.menu_images = []          # (block index, PIL Image, offset, w, h) for menu.tex
+            self.menu_index = 0
             self.chr_doc = None
             self.chr_path = None
             self.chr_refs = None
@@ -898,10 +901,11 @@ if tk is not None:
             # ---- data tab (.char .plt .ico .crt .nsbca .nslbc .tex)
             dt = ttk.Frame(self.nb)
             self.nb.add(dt, text='Data')
+            self.data_tab = dt
             dbar = ttk.Frame(dt)
             dbar.pack(fill='x')
             self.data_label = tk.StringVar(value=(
-                'Open a .char, .plt, .ico, .crt, .nsbca, .nslbc or .tex file in the list on the left.'))
+                'Advanced mode: open .char/.plt/.ico, .crt, animations, .nslbc, .tex or credits.bin.'))
             ttk.Label(dbar, textvariable=self.data_label).pack(side='left')
             self.btn_data_reload = reload_button(dbar, self.reload_data)
             self.btn_data_reload.pack(side='right')
@@ -973,12 +977,29 @@ if tk is not None:
             self.data_nb.pack(fill='both', expand=True)
             prev = ttk.Frame(self.data_nb, padding=2)
             self.data_nb.add(prev, text='Preview')
+            self.data_preview_page = prev
             self.data_note = tk.StringVar(value='')
             ttk.Label(prev, textvariable=self.data_note, foreground='#606060').pack(anchor='w')
+            # Navigation bar for Menus/menu.tex (hidden for other files).
+            self.menu_nav = ttk.Frame(prev)
+            self.menu_nav_label = tk.StringVar(value='Image 0 / 0')
+            ttk.Button(self.menu_nav, text='◀  Prev', width=9,
+                       command=self.menu_prev).pack(side='left', padx=(0, 4))
+            ttk.Label(self.menu_nav, textvariable=self.menu_nav_label,
+                      width=34, anchor='center').pack(side='left')
+            ttk.Button(self.menu_nav, text='Next  ▶', width=9,
+                       command=self.menu_next).pack(side='left', padx=(4, 8))
+            ttk.Button(self.menu_nav, text='Save this PNG…',
+                       command=self.save_current_menu_png).pack(side='left')
+            self.menu_nav.pack_forget()
             self.data_preview = tk.Canvas(prev, background='#303030', highlightthickness=1,
                                           highlightbackground='#7a7a7a')
             self.data_preview.pack(fill='both', expand=True)
             self.data_preview.bind('<Configure>', lambda e: self._draw_data_preview())
+            prev.bind('<Left>', self.on_menu_arrow)
+            prev.bind('<Right>', self.on_menu_arrow)
+            self.bind('<Left>', self.on_menu_arrow)
+            self.bind('<Right>', self.on_menu_arrow)
             hx = ttk.Frame(self.data_nb, padding=2)
             self.data_nb.add(hx, text='Bytes (hex)')
             hbar = ttk.Frame(hx)
@@ -1002,6 +1023,32 @@ if tk is not None:
             self.data_hex.configure(yscrollcommand=hsb.set)
             hsb.pack(side='right', fill='y')
             self.data_hex.pack(side='left', fill='both', expand=True)
+
+            # Structured view / edit of the decoded fields of data files.
+            st = ttk.Frame(self.data_nb, padding=2)
+            self.data_nb.add(st, text='Structured')
+            sf = ttk.Frame(st)
+            sf.pack(fill='both', expand=True)
+            self.struct_tree = ttk.Treeview(sf, show='headings', height=12)
+            stsb = ttk.Scrollbar(sf, command=self.struct_tree.yview)
+            self.struct_tree.configure(yscrollcommand=stsb.set)
+            stsb.pack(side='right', fill='y')
+            self.struct_tree.pack(side='left', fill='both', expand=True)
+            self.struct_tree.bind('<<TreeviewSelect>>', self.on_struct_select)
+            sef = ttk.LabelFrame(st, text=' Edit selected field (a backup is kept) ', padding=6)
+            sef.pack(side='bottom', fill='x', pady=(6, 0))
+            self.struct_hint = tk.StringVar(value='')
+            ttk.Label(sef, textvariable=self.struct_hint, foreground='#606060',
+                      wraplength=700).grid(row=0, column=0, columnspan=3, sticky='w')
+            ttk.Label(sef, text='Value').grid(row=1, column=0, sticky='e')
+            self.struct_value = tk.StringVar()
+            self.struct_entry = ttk.Entry(sef, textvariable=self.struct_value, width=58)
+            self.struct_entry.grid(row=1, column=1, padx=4, sticky='ew')
+            self.btn_struct_apply = ttk.Button(sef, text='Apply edit',
+                                               command=self.apply_struct_edit, state='disabled')
+            self.btn_struct_apply.grid(row=1, column=2, padx=(8, 0))
+            sef.columnconfigure(1, weight=1)
+            self.struct_rows = {}
 
             # ---- names tab (CodeStrings.CHR)
             ct = ttk.Frame(self.nb)
@@ -1302,7 +1349,7 @@ if tk is not None:
             """Simple = the level folder names; Advanced = the full file tree."""
             simple = self.browse_mode.get() == 'simple'
             self.filter_hint.set('filter level names (e.g. uplink)' if simple
-                                 else 'filter files (e.g. .nsbmd, barrel, .txt)')
+                                 else 'filter files (.nsbmd, .nslbc, .nsbca, .tex, barrel, ...)')
             self.fill_tree()
 
         def _fill_level_list(self, root, flt):
@@ -1971,14 +2018,91 @@ if tk is not None:
             self.btn_data_import.configure(state='disabled')
             self.btn_data_png.configure(state='disabled')
             self.btn_data_export_all.configure(state='disabled')
-            self.data_label.set('Open a .char, .plt, .ico, .crt, .nsbca, .nslbc or .tex file '
-                                'in the list on the left.')
+            self.data_label.set('Open a .char, .plt, .ico, .crt, .nsbca/.nsbma/.nsbta/.nsbtp, '
+                                '.nslbc, .tex or credits.bin file in Advanced mode.')
             self.data_note.set('')
             self.data_pal_bar.pack_forget()
+            self.struct_rows = {}
+            self.struct_tree['columns'] = ()
+            for iid in self.struct_tree.get_children():
+                self.struct_tree.delete(iid)
+            self.struct_value.set('')
+            self.struct_hint.set('')
+            self.btn_struct_apply.configure(state='disabled')
             self._set_readonly_text(self.data_summary, '')
             self.data_preview.delete('all')
             self.data_photo = None
+            self.menu_images = []
+            self.menu_index = 0
+            self.menu_nav.pack_forget()
             self._set_hex_text('', 0)
+
+        def _fill_struct(self, path, raw):
+            cols, rows = structured_edit.build_rows(path, raw)
+            self.struct_rows = {}
+            if not cols:
+                self.struct_tree['columns'] = ()
+                for iid in self.struct_tree.get_children():
+                    self.struct_tree.delete(iid)
+                self.btn_struct_apply.configure(state='disabled')
+                return False
+            self.struct_tree['columns'] = cols
+            for c in cols:
+                self.struct_tree.heading(c, text=c)
+                self.struct_tree.column(c, width=160, stretch=(c == cols[0]))
+            for iid in self.struct_tree.get_children():
+                self.struct_tree.delete(iid)
+            for i, r in enumerate(rows):
+                iid = self.struct_tree.insert('', 'end', values=r['values'])
+                self.struct_rows[iid] = r
+            self.struct_value.set('')
+            self.struct_hint.set('%d editable/viewable field(s). Select one to see its current '
+                                 'value and format.' % len(rows))
+            self.btn_struct_apply.configure(state='disabled')
+            return True
+
+        def on_struct_select(self, _event=None):
+            sel = self.struct_tree.selection()
+            if not sel:
+                return
+            r = self.struct_rows.get(sel[0])
+            if not r:
+                return
+            self.struct_value.set(r['text'])
+            editable = r['kind'] != 'none'
+            self.btn_struct_apply.configure(state='normal' if editable else 'disabled')
+            self.struct_hint.set('%s   %s' % (r['hint'] or r['kind'],
+                                              'offset 0x%X' % r['off'] if r['off'] else ''))
+
+        def apply_struct_edit(self):
+            sel = self.struct_tree.selection()
+            if not sel or not self.cur_path:
+                return
+            r = self.struct_rows.get(sel[0])
+            if not r:
+                return
+            try:
+                new = structured_edit.apply_edit(self.cur_path, self.data_raw, r,
+                                                 self.struct_value.get())
+            except Exception as e:
+                messagebox.showerror('Edit field', str(e))
+                return
+            if not messagebox.askyesno(
+                    'Edit field',
+                    'Change "%s" to "%s" at 0x%X?\n\nA copy of the original is kept in _backup.'
+                    % (r['kind'], self.struct_value.get(), r['off'])):
+                return
+            work = self.work_var.get().strip()
+            try:
+                backup_file(work, self.cur_path)
+                with open(self.cur_path, 'wb') as f:
+                    f.write(new)
+            except Exception as e:
+                return messagebox.showerror('Edit field', 'Could not save:\n%s' % e)
+            self.log('edited %s at 0x%X (%s)' % (os.path.basename(self.cur_path),
+                                                 r['off'], r['kind']))
+            self.log('Repack the ROM to test it.')
+            self.load_path(self.cur_path)
 
         def load_data(self, path):
             name = os.path.basename(path)
@@ -2004,9 +2128,14 @@ if tk is not None:
                 self._update_swatches()
             else:
                 self.data_pal_bar.pack_forget()
+            self._load_menu_images(path)
             self._draw_data_preview()
             self.show_data_hex(0)
-            self.data_nb.select(0 if ex.kind == 'image' else 1)
+            has_struct = self._fill_struct(path, raw)
+            if self.menu_images:
+                self.data_nb.select(0)          # show the browsable image gallery
+            else:
+                self.data_nb.select(2 if has_struct else (0 if ex.kind == 'image' else 1))
             self.nb.select(5)
             self.info.set('%s  -  %s' % (name, 'picture' if ex.kind == 'image' else 'data file'))
 
@@ -2043,9 +2172,95 @@ if tk is not None:
                 self.data.image = extra_files.palette_strip(self.data_palette)
             self._draw_data_preview()
 
+        def _load_menu_images(self, path):
+            self.menu_images = []
+            self.menu_index = 0
+            if not path.lower().endswith('menu.tex'):
+                self.menu_nav.pack_forget()
+                return
+            try:
+                for b in extra_files.mtex.blocks(path):
+                    im = extra_files.mtex.to_image(b['payload'], rec=b.get('rec'))
+                    if im is not None:
+                        self.menu_images.append((b['index'], im, b['offset']))
+            except Exception as e:
+                self.log('menu.tex: could not decode images (%s)' % e)
+            if self.menu_images:
+                self.menu_nav.pack(fill='x', before=self.data_preview)
+                self._update_menu_nav()
+            else:
+                self.menu_nav.pack_forget()
+
+        def _update_menu_nav(self):
+            if not self.menu_images:
+                self.menu_nav_label.set('Image 0 / 0')
+                return
+            i, im, off = self.menu_images[self.menu_index]
+            self.menu_nav_label.set('Image %d / %d  -  #%03d  %dx%d  @ 0x%X'
+                                    % (self.menu_index + 1, len(self.menu_images),
+                                       i, im.width, im.height, off))
+
+        def show_menu_image(self, i):
+            if not self.menu_images:
+                return
+            self.menu_index = max(0, min(len(self.menu_images) - 1, i))
+            self._update_menu_nav()
+            self._draw_data_preview()
+
+        def menu_prev(self):
+            self.show_menu_image(self.menu_index - 1)
+
+        def menu_next(self):
+            self.show_menu_image(self.menu_index + 1)
+
+        def on_menu_arrow(self, event=None):
+            if not self.menu_images:
+                return
+            if self.nb.select() != str(self.data_tab):
+                return
+            if self.data_nb.select() != str(self.data_preview_page):
+                return
+            focused = self.focus_get()
+            if focused is not None and isinstance(focused, (tk.Entry, ttk.Entry, tk.Text)):
+                return
+            if event is not None and event.keysym == 'Left':
+                self.menu_prev()
+            elif event is not None and event.keysym == 'Right':
+                self.menu_next()
+
+        def save_current_menu_png(self):
+            if not self.menu_images:
+                return
+            i, im, off = self.menu_images[self.menu_index]
+            p = filedialog.asksaveasfilename(
+                title='Save menu image #%d' % i, defaultextension='.png',
+                initialfile='menu_%03d.png' % i, filetypes=[('PNG picture', '*.png')])
+            if not p:
+                return
+            try:
+                im.save(p)
+            except Exception as e:
+                return messagebox.showerror('Save PNG', 'Could not save:\n%s' % e)
+            self.log('saved menu image #%d (%dx%d) to %s' % (i, im.width, im.height, p))
+
         def _draw_data_preview(self):
             c = self.data_preview
             c.delete('all')
+            if self.menu_images:
+                im = self.menu_images[self.menu_index][1]
+                w = max(1, c.winfo_width())
+                h = max(1, c.winfo_height())
+                scale = max(1, min((w - 16) // im.width, (h - 16) // im.height))
+                scale = min(scale, 16)
+                self.data_photo = ImageTk.PhotoImage(
+                    im.resize((im.width * scale, im.height * scale), Image.NEAREST))
+                c.create_image(w // 2, h // 2, image=self.data_photo, anchor='center')
+                c.create_text(6, 6, anchor='nw',
+                              text='#%d  %dx%d  (shown %dx)  -  use ◀ ▶ or arrow keys'
+                                   % (self.menu_images[self.menu_index][0],
+                                      im.width, im.height, scale),
+                              fill='#c8c8c8', font=('Segoe UI', 8))
+                return
             im = self.data.image if self.data else None
             w = max(1, c.winfo_width())
             h = max(1, c.winfo_height())
@@ -2122,14 +2337,14 @@ if tk is not None:
                 n = ok = 0
                 for b in extra_files.mtex.blocks(self.cur_path):
                     n += 1
-                    img = extra_files.mtex.parse_image(b['payload'])
+                    img = extra_files.mtex.parse_image(b['payload'], b.get('rec'))
                     if not img:
                         continue
-                    w, h = extra_files.mtex.guess_width(len(img[1]))
+                    w, h = extra_files.mtex.guess_width(len(img[1]), b.get('rec'))
                     if not w:
                         continue
                     fn = os.path.join(out, 'menu_%03d_%dx%d.png' % (b['index'], w, h))
-                    if extra_files.mtex.save_png(b['payload'], fn, w):
+                    if extra_files.mtex.save_png(b['payload'], fn, w, h, b.get('rec')):
                         ok += 1
             except Exception as e:
                 return messagebox.showerror('Export PNGs', 'Could not export:\n%s' % e)
