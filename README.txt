@@ -20,7 +20,8 @@ Workflow
   - .nsbmd = models, .nsbtx = shared textures, .cvhm = collision, .roo = room boxes (now editable),
     .lp = enemy/object placements and paths (now viewable and editable), .chr = the level name table
     (now editable), .txt and .lvl = text (now editable), .char/.plt/.ico = pictures and palettes, and
-    .crt/.nsbca/.nslbc/.tex = the Data tab (info + hex view/edit). Sounds\Sound_*.sdat and .sd hold
+    .crt/.nsbca/.nsbma/.nsbta/.nsbtp/.nslbc/.tex/credits.bin = the Data tab (info + hex view/edit).
+    Sounds\Sound_*.sdat and .sd hold
     the music, sound effects and their name/index table (new Sounds tab).
   - Edit, then "Repack ROM..." writes a new .nds. The first edit of any file keeps a copy in
     <work folder>/_backup ; "Revert file to original" restores it.
@@ -177,7 +178,7 @@ Text (Text tab)
     changes away. Ctrl+S also saves.
   - Only text characters the original file can store are allowed (ASCII for these files).
 
-Data tab (.char, .plt, .ico, .crt, .nsbca, .nslbc, .tex)
+Data tab (.char, .plt, .ico, .crt, .nsbca, .nsbma, .nsbta, .nsbtp, .nslbc, .tex, credits.bin)
   Select one of these files in the list on the left. The Data tab opens with a description on the
   left, a picture preview or byte view on the right, and a byte patch box at the bottom.
   - ".char" is a 32x32 picture with 16 colours (4 bits per pixel, 8x8 tile order). The colours
@@ -191,13 +192,25 @@ Data tab (.char, .plt, .ico, .crt, .nsbca, .nslbc, .tex)
     exports it; "Import PNG..." rewrites both the palette and the pixels at 64x64.
   - ".crt" is the object template table. The info panel lists the header, how many object and AI
     templates exist, and their readable names (from Global.LVL when it is nearby).
-  - ".nsbca" is a NITRO skeletal animation. The info panel shows the animation name, frame count,
-    track count and every track's flags/target, so you can inspect it even though this tool does
-    not play animations.
-  - ".nslbc" is a level's script bytecode. The info panel shows the header words, the 16-byte hash
-    records and the readable strings (names and messages) inside the file.
-  - ".tex" is a texture/data bank whose layout is not decoded yet. The info panel shows its size
-    and byte statistics; use the hex view and patch box.
+  - ".nsbca" is a NITRO skeletal animation. The info panel lists frames, tracks, each track's
+    target node and decoded channels (constant values or sampled keys with first/last values),
+    and the referenced rotation matrices.
+  - ".nsbma" is a NITRO material animation; ".nsbta" a texture/UV animation; ".nsbtp" a texture
+    flipbook. The info panel lists material names, channel flags/key counts, UV keyframes and
+    flipbook texture/palette frames. The exact GPU property of each material channel is inferred.
+    These files are fully decoded in nitro_anim.py and documented in documentation/Animation_Formats.md.
+    Byte-level edits are still possible; the viewer does not play animations.
+  - ".nslbc" is a level's event script. The layout (four hash tables + bytecode + strings) is decoded
+    and the info panel lists the callback blocks and disassembles their first instructions into
+    readable operations (e.g. TIMER, SETPROP COLLIDE, USE_STR "dWhiteToRed", STR "message").
+    Full disassembly: "python nslbc_dis.py <work> <level>". See documentation/NSLBC_Format.md.
+    Operation semantics of a few opcode families and ~1000 name hashes remain unknown; patch
+    bytes with care (changing code/string sizes requires fixing callback offsets).
+  - ".tex" (Menus/menu.tex) is a bank of 122 LZSS-compressed, palettised 8-bpp images. The info
+    panel lists every block with its offset, compressed/raw sizes and guessed dimensions.
+    "Export PNGs..." writes all images to a folder you pick (widths are guessed when not stored).
+    The hex view and patch box still work on the raw bytes.
+  - "credits.bin" is the end-credits string table (382 strings); the info panel lists them.
   - The "Bytes (hex)" page shows 8 KB at a time. Type an offset (hex) and press Go, or use the
     8 KB page buttons. The view is read-only.
   - "Byte patch" writes bytes at an offset (both hexadecimal). Example: offset 200, bytes

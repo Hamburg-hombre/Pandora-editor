@@ -24,12 +24,18 @@ import struct
 from PIL import Image
 
 import objects_lp as lpmod
+import nitro_anim as anim
+import menu_tex as mtex
+import nslbc_lib as nsdislib
+import nslbc_dis as nsdis
 
 
-EXTENSIONS = ('.char', '.plt', '.ico', '.crt', '.nsbca', '.nslbc', '.tex', '.lvl')
+EXTENSIONS = ('.char', '.plt', '.ico', '.crt', '.nsbca', '.nsbma', '.nsbta',
+              '.nsbtp', '.nslbc', '.tex', '.lvl')
 
 # The GUI's Data tab is used for these (all but .lvl, which is text).
-DATA_EXTENSIONS = ('.char', '.plt', '.ico', '.crt', '.nsbca', '.nslbc', '.tex')
+DATA_EXTENSIONS = ('.char', '.plt', '.ico', '.crt', '.nsbca', '.nsbma',
+                   '.nsbta', '.nsbtp', '.nslbc', '.tex')
 
 
 class ExtraError(Exception):
@@ -37,7 +43,8 @@ class ExtraError(Exception):
 
 
 def is_data_file(path):
-    return path.lower().endswith(DATA_EXTENSIONS)
+    low = path.lower()
+    return low.endswith(DATA_EXTENSIONS) or os.path.basename(low) == 'credits.bin'
 
 
 # ====================================================== colour helpers
@@ -344,142 +351,286 @@ def describe_crt(path, data):
     return '\n'.join(lines)
 
 
-# ====================================================== .nsbca
-def _nsbca_strings(data, start, end):
-    out = []
-    for m in re.finditer(rb'[ -~]{3,}\x00', data[start:end]):
-        out.append(m.group()[:-1].decode('latin-1'))
-    return out
+# ====================================================== NITRO animations
+# Parsers live in nitro_anim.py and are validated on all 286 animation files.
+def _anim_common(data, parser, label):
+    try:
+        r = parser(data)
+    except Exception as e:
+        return ['%s' % label, '', 'Could not parse: %s: %s' % (type(e).__name__, e)]
+    h = r['header']
+    lines = [label, '']
+    lines.append('Size:      %d bytes (header says %d)' % (len(data), h['size']))
+    lines.append('Container: %s v%d, chunk at 0x%X, animation at 0x%X'
+                 % (h['magic'].decode('latin-1'), h['version'], r['chunk'],
+                    r['anims'][0]['off'] if r['anims'] else 0))
+    lines.append('Animation(s): %d' % len(r['anims']))
+    for a in r['anims'][:3]:
+        if 'frames' in a:
+            lines.append('  %s: %d frames, %d tracks'
+                         % (a['name'], a['frames'], len(a.get('tracks', []))))
+        else:
+            lines.append('  %s: %d texture(s), %d palette(s), %d tracks'
+                         % (a['name'], len(a.get('texnames', [])),
+                            len(a.get('palnames', [])), len(a.get('tracks', []))))
+    if len(r['anims']) > 3:
+        lines.append('  ... and %d more' % (len(r['anims']) - 3))
+    return lines, r
+
+
+def _fmt_curve(c):
+    if c['const']:
+        if c['kind'] == 'rot':
+            return 'const rot %d (%s)' % (c['matrix'], 'pivot' if c['pivot'] else 'basis')
+        return 'const %.4f' % c['value']
+    s = c.get('samples', [])
+    if not s:
+        return 'sampled %d..%d (no samples)' % (c['start'], c['end'])
+    first = float(s[0].get('value', s[0].get('rot_idx', 0)))
+    last = float(s[-1].get('value', s[-1].get('rot_idx', 0)))
+    return 'sampled %d..%d, %d keys: %.3f .. %.3f' % (
+        c['start'], c['end'], len(s), first, last)
 
 
 def describe_nsbca(path, data):
-    if len(data) < 0x20 or data[:4] != b'BCA0':
-        raise ExtraError('not a NITRO BCA0 animation')
-    filesize = struct.unpack_from('<I', data, 8)[0]
-    hdr_size, nchunks = struct.unpack_from('<HH', data, 0x0c)
-    chunk = struct.unpack_from('<I', data, 0x10)[0]
-    lines = ['NITRO skeletal animation (.nsbca)', '']
-    lines.append('Size:      %s bytes (header says %s)' % (format(len(data), ','),
-                                                           format(filesize, ',')))
-    lines.append('Header:    version %d, %d chunk(s), header size 0x%X'
-                 % (struct.unpack_from('<H', data, 6)[0], nchunks, hdr_size))
-    if chunk + 8 > len(data) or data[chunk:chunk + 4] != b'JNT0':
+    out = _anim_common(data, anim.parse_nsbca, 'NITRO skeletal animation (.nsbca)')
+    if isinstance(out, list):
+        return '\n'.join(out)
+    lines, r = out
+    for a in r['anims'][:1]:
+        lines += ['', 'Tracks (node index = animated joint):',
+                  '  #  offset  flags   node  channels']
+        for i, t in enumerate(a['tracks'][:50]):
+            ch = '; '.join('%s %s' % (nm, _fmt_curve(c)) for nm, c in t['channels'])
+            lines.append('  %2d 0x%04X 0x%04X %4d  %s'
+                         % (i, t['off'], t['flags'], t['target'], ch[:110]))
+        if len(a['tracks']) > 50:
+            lines.append('  ... and %d more tracks' % (len(a['tracks']) - 50))
+        m = a['matrices']
         lines.append('')
-        lines.append('This file has no JNT0 joint block, so there is no animation to summarise.')
-        return '\n'.join(lines)
-    jnt0_size = struct.unpack_from('<I', data, chunk + 4)[0]
-    jnt0_end = min(len(data), chunk + jnt0_size)
-    jac = data.find(b'J\x00AC', chunk + 8, jnt0_end)
-    names = _nsbca_strings(data, chunk + 8, jac if jac > 0 else jnt0_end)
-    lines.append('JNT0:      offset 0x%X, %s bytes' % (chunk, format(jnt0_size, ',')))
-    if names:
-        lines.append('Name(s):   ' + ', '.join(names[:6]) + (' ...' if len(names) > 6 else ''))
-    if jac < 0:
+        lines.append('Rotation matrices: %d pivot, %d basis (referenced)'
+                     % (len(m['pivot']), len(m['basis'])))
+    lines += ['', 'Byte-level edits are possible with the patch box; the viewer does not play animations.']
+    return '\n'.join(lines)
+
+
+def describe_nsbta(path, data):
+    out = _anim_common(data, anim.parse_nsbta, 'NITRO texture/UV animation (.nsbta)')
+    if isinstance(out, list):
+        return '\n'.join(out)
+    lines, r = out
+    names = ('scale U', 'scale V', 'rotation', 'translate U', 'translate V')
+    for a in r['anims'][:2]:
+        lines += ['', 'Tracks (material name -> 5 UV channels):']
+        for t in a['tracks'][:40]:
+            lines.append('  %-22s %s' % (t['name'][:22],
+                         ', '.join('%s=f%04X(%d)' % (names[i], c['flags'], c['nframes'])
+                                   for i, c in enumerate(t['channels']))))
+        if len(a['tracks']) > 40:
+            lines.append('  ... and %d more tracks' % (len(a['tracks']) - 40))
+    return '\n'.join(lines)
+
+
+def describe_nsbtp(path, data):
+    out = _anim_common(data, anim.parse_nsbtp, 'NITRO texture-pattern animation (.nsbtp)')
+    if isinstance(out, list):
+        return '\n'.join(out)
+    lines, r = out
+    for a in r['anims'][:2]:
         lines.append('')
-        lines.append('No J.AC animation block was found.')
-        return '\n'.join(lines)
-    frames, tracks = struct.unpack_from('<HH', data, jac + 4)
-    pivot, basis = struct.unpack_from('<II', data, jac + 0x0c)
-    lines.append('Animation: offset 0x%X' % jac)
-    lines.append('Frames:    %d' % frames)
-    lines.append('Tracks:    %d (one per animated joint)' % tracks)
-    lines.append('Pivot:     ' + ('none' if pivot == 0 else '0x%X' % pivot) +
-                 '    Basis: ' + ('none' if basis == 0 else '0x%X' % basis))
-    lines.append('')
-    lines.append('Track  Offset   Size   Flags   Target  Channels')
-    offs = []
-    for i in range(tracks):
-        if jac + 0x14 + i * 2 + 2 <= len(data):
-            offs.append(struct.unpack_from('<H', data, jac + 0x14 + i * 2)[0])
-    for i, rel in enumerate(offs[:60]):
-        off = jac + rel
-        if off + 4 > len(data):
-            continue
-        nxt = jac + offs[i + 1] if i + 1 < len(offs) else min(len(data), jac + (pivot or 0))
-        size = max(4, nxt - off)
-        flags, _dummy, target = struct.unpack_from('<HBB', data, off)
-        # GBATEK: bit0 = no channels, bits1-2 / 6-7 / 9-10 hide a whole channel,
-        # bits3-5 and 8 and 11-13 mark individual channels as constant.
-        channels = []
-        if flags & 1:
-            channels.append('none')
-        else:
-            if not (flags & 0b110):
-                const = (flags & 0b111000) == 0b111000
-                channels.append('translation' + (' (const)' if const else ''))
-            if not (flags & 0b11000000):
-                channels.append('rotation' + (' (const)' if flags & 0b100000000 else ''))
-            if not (flags & 0b11000000000):
-                const = (flags & 0b11100000000000) == 0b11100000000000
-                channels.append('scale' + (' (const)' if const else ''))
-        lines.append('%4d   0x%04X  %5d   0x%04X  %3d     %s'
-                     % (i, off, size, flags, target, ', '.join(channels) or 'no channels'))
-    if len(offs) > 60:
-        lines.append('... and %d more tracks' % (len(offs) - 60))
-    lines += ['', 'This is the NITRO animation data. Byte-level tweaks are possible with the',
-              'patch box below; the model viewer does not play these animations.']
+        lines.append('Textures: %s' % ', '.join(a['texnames'][:10]))
+        lines.append('Palettes: %s' % ', '.join(a['palnames'][:10]))
+        lines.append('Flipbook tracks:')
+        for t in a['tracks'][:30]:
+            ks = ', '.join('%d:%s/%s' % (k['frame'], k['tex'], k['pal']) for k in t['keys'][:8])
+            lines.append('  %-20s %d keys: %s' % (t['name'][:20], t['nkeys'], ks))
+    return '\n'.join(lines)
+
+
+def describe_nsbma(path, data):
+    out = _anim_common(data, anim.parse_nsbma, 'NITRO material animation (.nsbma)')
+    if isinstance(out, list):
+        return '\n'.join(out)
+    lines, r = out
+    for a in r['anims'][:2]:
+        lines += ['', 'Tracks (material name -> 5 channels):',
+                  '  material                ch0     ch1     ch2     ch3     ch4']
+        for t in a['tracks'][:40]:
+            cells = []
+            for c in t['channels']:
+                if c['flags'] & 0x20:
+                    cells.append('fix %04X' % c['fixed'])
+                else:
+                    cells.append('%d keys' % len(c.get('values', [])))
+            lines.append('  %-22s %s' % (t['name'][:22], ' '.join('%-8s' % x for x in cells)))
+        if len(a['tracks']) > 40:
+            lines.append('  ... and %d more tracks' % (len(a['tracks']) - 40))
+    lines += ['', 'Channel-to-material-property mapping is inferred; values are decoded from the file.']
     return '\n'.join(lines)
 
 
 # ====================================================== .nslbc
 def describe_nslbc(path, data):
-    words = list(struct.unpack_from('<8I', data, 0)) if len(data) >= 32 else []
+    """Level script bytecode: section tables + disassembled callback blocks."""
     lines = ['Level script bytecode (NSLBC)', '']
-    lines.append('Size:      %s bytes' % format(len(data), ','))
-    if words:
-        lines.append('Header:    ' + '  '.join('%d (0x%X)' % (w, w) for w in words))
-    records = []
-    off = 0x20
-    while off + 16 <= len(data):
-        h, kind, marker, tail = struct.unpack_from('<IIII', data, off)
-        if marker != 0xffffffff or tail != 0 or kind > 0x100:
-            break
-        records.append((off, h, kind))
-        off += 16
-    lines.append('Hash list: %d record(s) from 0x20' % len(records))
-    lines.append('           { name hash, type, 0xFFFFFFFF, 0 }')
-    if records:
-        kinds = sorted({r[2] for r in records})
-        lines.append('Types:     ' + ', '.join(str(k) for k in kinds[:20]) +
-                     (' ...' if len(kinds) > 20 else ''))
-        lines.append('First:     ' + ', '.join('0x%08X (type %d)' % (h, k)
-                                               for _o, h, k in records[:5]))
-    # Bytecode bytes often form short random printable runs. Keep only text
-    # that looks like a real name or message (mostly letters, normal punctuation).
+    lines.append('Size:      %d bytes' % len(data))
+    try:
+        r = nsdislib.parse(data)
+        s = r['s']
+        h = s['hdr']
+    except Exception as e:
+        return lines + ['', 'Could not parse: %s: %s' % (type(e).__name__, e)]
+    if h[0] != 3 or s['str'] + h[6] != len(data):
+        return lines + ['', 'Unexpected header (version %d, strings end at 0x%X, file %d bytes)'
+                        % (h[0], s['str'] + h[6], len(data))]
+    lines.append('Header:    version %d, code %d bytes, strings %d bytes'
+                 % (h[0], h[5], h[6]))
+    lines.append('Sections:  A %d records @0x%X, B %d @0x%X, C %d @0x%X, D %d @0x%X'
+                 % (h[1], s['a'], h[2], s['b'], h[3], s['c'], h[4], s['d']))
+    lines.append('Strings:   %d, code instructions: %d words'
+                 % (len(r['strs']), len(r['code']) // 4))
+    lines += ['', 'Callback blocks (C): hash -> code offset/length',
+              '  #   callback                     hash      offset  length']
+    for i, (ch, off, ln, fl) in enumerate(r['C'][:40]):
+        nm = nsdis.HASHNAMES.get(ch, '')
+        lines.append('  %-3d %-28s %08X %7d %7d' % (i, nm[:28], ch, off, ln))
+    if len(r['C']) > 40:
+        lines.append('  ... and %d more' % (len(r['C']) - 40))
+    # disassemble up to 8 callback blocks
+    work = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'work'))
+    lvl = os.path.basename(os.path.dirname(path))
+    try:
+        rev = nsdis.load_names(work, lvl)
+        strmap = {o - s['str']: o2 for o, o2 in r['strs']}
+        for i, (ch, off, ln, fl) in enumerate(r['C'][:8]):
+            lines += ['', '=== C#%d %s ===' % (i, rev.get(ch, '%08X' % ch))]
+            if ln % 4 or off + ln > len(r['code']):
+                lines.append('  (invalid block)')
+                continue
+            w = struct.unpack_from('<%dI' % (ln // 4), r['code'], off)
+            j = 0
+            shown = 0
+            while j < len(w) and shown < 30:
+                op = w[j]
+                n = nsdis.ARITY.get(op)
+                if n is None:
+                    lines.append('  %04x: UNKNOWN %08X' % (off + 4 * j, op))
+                    break
+                args = w[j + 1:j + 1 + n]
+                j += 1 + n
+                a = ', '.join(nsdis.operand_annotation(x, strmap, rev, op) for x in args)
+                lines.append('  %04x: %-8s %s' % (off + 4 * (j - 1 - n),
+                                                  nsdis.OPNAME.get(op, 'OP%04x' % op), a))
+                shown += 1
+            if j < len(w):
+                lines.append('  ... (%d more instruction(s))' % (len(w) - j))
+    except Exception as e:
+        lines.append('')
+        lines.append('Disassembly skipped: %s: %s' % (type(e).__name__, e))
+    lines += ['', 'Full disassembly: python nslbc_dis.py <work> <level>  (see NSLBC_Format.md).',
+              'Byte edits with the patch box stay valid; do not reorder sections or change',
+              'the code/string size fields without fixing the callback offsets.']
+    return '\n'.join(lines)
+
+
+# ====================================================== credits.bin
+def describe_credits(path, data):
+    """Menus/credits.bin: {u32 count, u32 offset[count], NUL strings}.
+    Offsets are relative to 4 + 4*count (the start of the strings region)."""
+    lines = ['Credits string table (credits.bin)', '']
+    if len(data) < 4:
+        return lines + ['File is too short.']
+    n = struct.unpack_from('<I', data, 0)[0]
+    base = 4 + 4 * n
+    lines.append('Size:      %d bytes' % len(data))
+    lines.append('Strings:   %d, table at 0x%X..0x%X, text from 0x%X'
+                 % (n, 4, base - 1, base))
+    if base > len(data):
+        return lines + ['Offset table runs past the end of the file.']
+    offs = list(struct.unpack_from('<%dI' % n, data, 4))
     strings = []
-    for o, s in _printable_strings(data, 0, 4):
-        if len(s) < 5 or s != s.strip():
-            continue
-        if not re.fullmatch(r"[A-Za-z0-9 _\-/.,:!%'()]+", s):
-            continue
-        if sum(ch.isalpha() for ch in s) < 3:
-            continue
-        strings.append((o, s))
-    lines.append('')
-    lines.append('Readable text (%d string(s)):' % len(strings))
-    for o, s in strings[:60]:
-        lines.append('  0x%05X  %s' % (o, s))
-    if len(strings) > 60:
-        lines.append('  ... and %d more' % (len(strings) - 60))
-    lines += ['', 'The bytecode itself is not decoded. Use the patch box below to change',
-              'individual bytes; the strings above are the easiest safe edit.']
+    for i, o in enumerate(offs):
+        s = base + o
+        if s >= len(data):
+            lines.append('Bad offset for string %d: %d' % (i, o))
+            break
+        e = data.find(b'\x00', s)
+        if e < 0:
+            lines.append('String %d is not NUL terminated' % i)
+            break
+        strings.append(data[s:e].decode('latin-1'))
+    lines.append('Decoded:   %d/%d string(s)' % (len(strings), n))
+    lines += ['', 'First strings:']
+    for i, s in enumerate(strings[:40]):
+        lines.append('  %3d  %s' % (i, s))
+    if len(strings) > 40:
+        lines.append('  ... and %d more' % (len(strings) - 40))
     return '\n'.join(lines)
 
 
 # ====================================================== .tex
 def describe_tex(path, data):
-    import collections
-    lines = ['Texture/data bank (.tex)', '']
-    lines.append('Size:      %s bytes' % format(len(data), ','))
-    lines.append('First 32:  ' + data[:32].hex(' '))
-    counts = collections.Counter(data)
-    lines.append('Common bytes: ' + ', '.join('%02X x%s' % (b, format(n, ','))
-                                               for b, n in counts.most_common(6)))
+    """Menus/menu.tex: 122 LZSS blocks, each a palettised 8-bpp image."""
+    lines = ['Menu texture bank (.tex)', '']
+    lines.append('Size:      %d bytes' % len(data))
+    try:
+        bs = list(mtex.blocks(path))
+    except Exception as e:
+        return lines + ['', 'Could not decode: %s: %s' % (type(e).__name__, e)]
+    lines.append('Blocks:    %d LZSS-compressed images' % len(bs))
     lines.append('')
-    lines.append('This file does not have a documented layout in this tool yet:')
-    lines.append('it is not a single NITRO texture and it has no readable header.')
-    lines.append('It can still be inspected and changed byte by byte with the')
-    lines.append('hex view and patch box below. Keep a backup before experimenting.')
+    lines.append('  #  offset     compressed  raw bytes  pad  palette  indices  guessed size')
+    for b in bs[:60]:
+        img = mtex.parse_image(b['payload'])
+        ni = len(img[1]) if img else 0
+        w, h = mtex.guess_width(ni) if img else (None, None)
+        lines.append(' %3d 0x%07X %9d %10d %3d  %-7s %8s  %s' % (
+            b['index'], b['offset'], b['next'] - b['offset'], b['usize'], b['padding'],
+            'yes' if img else 'NO', ni,
+            '%dx%d' % (w, h) if w else 'unknown'))
+    if len(bs) > 60:
+        lines.append('  ... and %d more blocks' % (len(bs) - 60))
+    lines += ['', 'Block header: u8 0x10 + u24 uncompressed size; payload is LZSS',
+              '(MSB-first flags, backrefs: count=(a>>4)+3, distance=((a&0xF)<<8|b)+1).',
+              'Each payload is u16[256] RGB555 palette + 8x8-tiled 8-bpp indices.',
+              'Widths are not stored in the file; the guessed sizes are inferred.',
+              'Use "Export PNGs..." in the toolbar to write every block as an image.',
+              'The hex patch box still edits raw bytes.']
+    return '\n'.join(lines)
+
+
+# ====================================================== credits.bin
+def describe_credits(path, data):
+    """Menus/credits.bin: {u32 count, u32 offset[count], NUL strings}.
+    Offsets are relative to 4 + 4*count (the start of the strings region)."""
+    lines = ['Credits string table (credits.bin)', '']
+    if len(data) < 4:
+        return lines + ['File is too short.']
+    n = struct.unpack_from('<I', data, 0)[0]
+    base = 4 + 4 * n
+    lines.append('Size:      %d bytes' % len(data))
+    lines.append('Strings:   %d, table at 0x%X..0x%X, text from 0x%X'
+                 % (n, 4, base - 1, base))
+    if base > len(data):
+        return lines + ['Offset table runs past the end of the file.']
+    offs = list(struct.unpack_from('<%dI' % n, data, 4))
+    strings = []
+    for i, o in enumerate(offs):
+        s = base + o
+        if s >= len(data):
+            lines.append('Bad offset for string %d: %d' % (i, o))
+            break
+        e = data.find(b'\x00', s)
+        if e < 0:
+            lines.append('String %d is not NUL terminated' % i)
+            break
+        strings.append(data[s:e].decode('latin-1'))
+    lines.append('Decoded:   %d/%d string(s)' % (len(strings), n))
+    lines += ['', 'First strings:']
+    for i, s in enumerate(strings[:40]):
+        lines.append('  %3d  %s' % (i, s))
+    if len(strings) > 40:
+        lines.append('  ... and %d more' % (len(strings) - 40))
     return '\n'.join(lines)
 
 
@@ -574,10 +725,18 @@ class ExtraFile:
             self.summary = describe_crt(self.path, data)
         elif low.endswith('.nsbca'):
             self.summary = describe_nsbca(self.path, data)
+        elif low.endswith('.nsbma'):
+            self.summary = describe_nsbma(self.path, data)
+        elif low.endswith('.nsbta'):
+            self.summary = describe_nsbta(self.path, data)
+        elif low.endswith('.nsbtp'):
+            self.summary = describe_nsbtp(self.path, data)
         elif low.endswith('.nslbc'):
             self.summary = describe_nslbc(self.path, data)
         elif low.endswith('.tex'):
             self.summary = describe_tex(self.path, data)
+        elif os.path.basename(low) == 'credits.bin':
+            self.summary = describe_credits(self.path, data)
         else:
             raise ExtraError('not a supported extra file type')
 

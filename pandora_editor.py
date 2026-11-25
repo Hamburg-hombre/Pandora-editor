@@ -908,6 +908,9 @@ if tk is not None:
             self.btn_data_png = ttk.Button(dbar, text='Save PNG…', command=self.save_data_png,
                                            state='disabled')
             self.btn_data_png.pack(side='right', padx=4)
+            self.btn_data_export_all = ttk.Button(dbar, text='Export PNGs…',
+                                                  command=self.export_menu_tex, state='disabled')
+            self.btn_data_export_all.pack(side='right', padx=4)
             self.btn_data_import = ttk.Button(dbar, text='Import PNG…', command=self.import_data_png,
                                               state='disabled')
             self.btn_data_import.pack(side='right')
@@ -1967,6 +1970,7 @@ if tk is not None:
             self.data_char_raw = None
             self.btn_data_import.configure(state='disabled')
             self.btn_data_png.configure(state='disabled')
+            self.btn_data_export_all.configure(state='disabled')
             self.data_label.set('Open a .char, .plt, .ico, .crt, .nsbca, .nslbc or .tex file '
                                 'in the list on the left.')
             self.data_note.set('')
@@ -1991,6 +1995,7 @@ if tk is not None:
             self._set_readonly_text(self.data_summary, ex.summary)
             self.btn_data_import.configure(state='normal' if ex.import_kind else 'disabled')
             self.btn_data_png.configure(state='normal' if ex.image else 'disabled')
+            self.btn_data_export_all.configure(state='normal' if name.lower() == 'menu.tex' else 'disabled')
             self.data_note.set(ex.preview_note)
             self.data_palette = list(ex.palette) if ex.palette else None
             self.data_char_raw = ex.char_raw
@@ -2105,6 +2110,30 @@ if tk is not None:
             except Exception as e:
                 return messagebox.showerror('Save PNG', 'Could not save:\n%s' % e)
             self.log('saved picture %s' % p)
+
+        def export_menu_tex(self):
+            """Write every LZSS image block of Menus/menu.tex as a PNG."""
+            if not self.cur_path or not self.cur_path.lower().endswith('menu.tex'):
+                return
+            out = filedialog.askdirectory(title='Folder for exported menu images')
+            if not out:
+                return
+            try:
+                n = ok = 0
+                for b in extra_files.mtex.blocks(self.cur_path):
+                    n += 1
+                    img = extra_files.mtex.parse_image(b['payload'])
+                    if not img:
+                        continue
+                    w, h = extra_files.mtex.guess_width(len(img[1]))
+                    if not w:
+                        continue
+                    fn = os.path.join(out, 'menu_%03d_%dx%d.png' % (b['index'], w, h))
+                    if extra_files.mtex.save_png(b['payload'], fn, w):
+                        ok += 1
+            except Exception as e:
+                return messagebox.showerror('Export PNGs', 'Could not export:\n%s' % e)
+            self.log('exported %d of %d menu images to %s' % (ok, n, out))
 
         def apply_data_palette(self):
             if not self.cur_path or not self.data_palette:
