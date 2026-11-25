@@ -282,3 +282,17 @@ Sounds (Sounds tab, Sounds\Sound_*.sd and .sdat)
     weapon use a different effect); changing the hash changes which name the game looks up.
   - "Revert file to original" restores both the .sd and the .sdat from _backup. Repack the ROM to
     test a change in an emulator.
+
+ARM code (ARM tab)
+------------------
+  After unpacking, the ARM tab shows a labelled ARM disassembly of _arm9.bin or
+  _arm7.bin. ARM9's code blob is LZSS-compressed in the ROM, so the tab shows the
+  decompressed body (base 0x0206F26C); ARM7 is shown as-is (base 0x02380000).
+  - Pick arm9/arm7, then "Reload" to re-read the work folder's binaries.
+  - Patch readable bytes with a hex offset and hex byte pairs, e.g. offset 100,
+    bytes 00 FF 7A. Values are written into the decompressed view.
+  - "Save .bin" recompresses ARM9 (or copies ARM7) back into the work folder.
+  - "Repack ROM..." writes a new .nds with the edited ARM binaries; the ordinary
+    Repack button does not touch them.
+  See ../documentation/ARM_Decoding.md for the exact LZSS/footer format, verified
+  round-trip tests and limitations (assembly-level only, no symbol names).

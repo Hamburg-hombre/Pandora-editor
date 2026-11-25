@@ -54,6 +54,7 @@ except ImportError:          # headless use (tests); main() explains the problem
 try:
     from nitro import *          # noqa
     import nds_unpack, nds_repack, export_models, collision
+    import arm_tools as armtools
     import objects_lp as lpmod
     import extra_files
     import structured_edit
@@ -1312,6 +1313,123 @@ if tk is not None:
                 wraplength=820, justify='left').grid(row=1, column=0, columnspan=9,
                                                      sticky='w', pady=(4, 0))
 
+            # ---- ARM tab (decoded ARM9 / ARM7 code)
+            atf = ttk.Frame(self.nb)
+            self.nb.add(atf, text='ARM')
+            abar = ttk.Frame(atf)
+            abar.pack(fill='x')
+            ttk.Label(abar, text='CPU:').pack(side='left')
+            self.arm_cpu = ttk.Combobox(abar, values=('arm9', 'arm7'), state='readonly', width=8)
+            self.arm_cpu.set('arm9')
+            self.arm_cpu.pack(side='left')
+            self.arm_cpu.bind('<<ComboboxSelected>>', lambda e: self.arm_show())
+            ttk.Button(abar, text='Reload', command=self.arm_reload).pack(side='left', padx=5)
+            ttk.Button(abar, text='Save .bin', command=self.arm_save).pack(side='left')
+            ttk.Button(abar, text='Repack ROM…', command=self.arm_repack).pack(side='left', padx=5)
+            self.arm_info = ttk.Label(abar, text='Unpack a ROM first.', foreground='#606060')
+            self.arm_info.pack(side='left', padx=10)
+            af = ttk.Frame(atf)
+            af.pack(fill='both', expand=True)
+            self.arm_text = tk.Text(af, wrap='none', state='disabled', font=('Consolas', 9))
+            asb = ttk.Scrollbar(af, command=self.arm_text.yview)
+            self.arm_text.configure(yscrollcommand=asb.set)
+            self.arm_text.pack(side='left', fill='both', expand=True)
+            asb.pack(side='right', fill='y')
+            pf = ttk.LabelFrame(atf, text=' Patch readable bytes ', padding=5)
+            pf.pack(fill='x')
+            ttk.Label(pf, text='Offset (hex):').grid(row=0, column=0, sticky='e')
+            self.arm_off = ttk.Entry(pf, width=12)
+            self.arm_off.insert(0, '0')
+            self.arm_off.grid(row=0, column=1)
+            ttk.Label(pf, text='Bytes (hex):').grid(row=0, column=2, sticky='e')
+            self.arm_bytes = ttk.Entry(pf, width=30)
+            self.arm_bytes.grid(row=0, column=3, sticky='ew')
+            ttk.Button(pf, text='Apply', command=self.arm_patch).grid(row=0, column=4, padx=6)
+            ttk.Label(pf, text=('ARM9 is decompressed in memory (base 0x0206F26C); patching writes '
+                                'into that view. Save .bin recompresses it; Repack ROM writes a new '
+                                '.nds with both ARM binaries. The listing shows the first 20,000 '
+                                'instructions; `python arm_tools.py dis <work> arm9 out.txt` writes all.'),
+                      foreground='#606060',
+                      wraplength=760, justify='left').grid(row=1, column=0, columnspan=5,
+                                                          sticky='w', pady=(4, 0))
+            self.arm_images = {}
+
+        # ------------------------------------------------------------- ARM code
+        def arm_reload(self, show=True):
+            work = self.work_var.get().strip()
+            if not work or not os.path.isdir(work):
+                self.arm_info.configure(text='Set a work folder (Unpack ROM) first.')
+                return
+            try:
+                self.arm_images = armtools.load(work)
+            except Exception as e:
+                self.arm_info.configure(text='Could not load ARM binaries: %s' % e)
+                return
+            if show:
+                self.arm_show()
+            else:
+                self.arm_info.configure(text='%d ARM image(s) loaded. Open the ARM tab to disassemble.'
+                                        % len(self.arm_images))
+
+        def arm_show(self):
+            img = self.arm_images.get(self.arm_cpu.get())
+            if img is None:
+                self.arm_info.configure(text='No %s binary in the work folder.' % self.arm_cpu.get())
+                return
+            self.arm_info.configure(text='%s: %d bytes at 0x%08X%s' %
+                                    (img.name, len(img.data), img.base,
+                                     '  (patched, not saved)' if img.dirty() else ''))
+            try:
+                text = armtools.disassemble(img, max_lines=20000)
+            except Exception as e:
+                text = 'Disassembly unavailable: %s' % e
+            self.arm_text.configure(state='normal')
+            self.arm_text.delete('1.0', 'end')
+            self.arm_text.insert('1.0', text)
+            self.arm_text.configure(state='disabled')
+            self.arm_text.yview('moveto', 0.0)
+
+        def arm_patch(self):
+            img = self.arm_images.get(self.arm_cpu.get())
+            if img is None:
+                return messagebox.showerror('ARM', 'Load the work folder first.')
+            try:
+                off = int(self.arm_off.get().strip(), 16)
+                raw = bytes.fromhex(self.arm_bytes.get().strip().replace(' ', ''))
+            except ValueError as e:
+                return messagebox.showerror('ARM', 'Offset must be hex and bytes must be hex pairs.\n%s' % e)
+            if off < 0 or off + len(raw) > len(img.data):
+                return messagebox.showerror('ARM', 'Patch is outside the readable image (0..0x%X).'
+                                            % (len(img.data) - 1))
+            img.write_bytes(off, raw)
+            self.log('arm: patched %d byte(s) at 0x%X in %s' % (len(raw), off, img.name))
+            self.arm_show()
+
+        def arm_save(self):
+            img = self.arm_images.get(self.arm_cpu.get())
+            if img is None:
+                return messagebox.showerror('ARM', 'Load the work folder first.')
+            try:
+                n = img.save()
+            except Exception as e:
+                return messagebox.showerror('ARM', 'Could not write %s:\n%s' % (img.path, e))
+            self.log('wrote %s (%d bytes) - use Repack ROM to put it in a new .nds'
+                     % (img.path, n))
+            self.arm_show()
+
+        def arm_repack(self):
+            work = self.work_var.get().strip()
+            rom = self.rom_var.get().strip()
+            if not work or not rom or not os.path.isfile(rom):
+                return messagebox.showerror('ARM', 'Select a ROM and unpack it first.')
+            out = filedialog.asksaveasfilename(title='Write ARM-aware ROM',
+                                               defaultextension='.nds',
+                                               filetypes=[('Nintendo DS ROM', '*.nds')])
+            if not out:
+                return
+            self.run_job(lambda: armtools.repack_with_arm(rom, work, out, log=self.log),
+                         after=lambda: self.log('ARM-aware ROM written: %s' % out))
+
         def report_callback_exception(self, exc, val, tb):
             msg = ''.join(traceback.format_exception(exc, val, tb))
             try:
@@ -1389,7 +1507,8 @@ if tk is not None:
                                            'will be OVERWRITTEN (your edits would be lost). Continue?'):
                     return
             self.log('Unpacking %s …' % rom)
-            self.run_job(lambda: nds_unpack.unpack(rom, out, self.log), after=self.fill_tree)
+            self.run_job(lambda: nds_unpack.unpack(rom, out, self.log),
+                         after=lambda: (self.fill_tree(), self.arm_reload(show=False)))
 
         def do_repack(self):
             rom, work = self.rom_var.get().strip(), self.work_var.get().strip()
