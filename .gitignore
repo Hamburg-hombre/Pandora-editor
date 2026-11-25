@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 pandora_editor_error.log
+viewer3d_data/
+viewer3d_error.log
