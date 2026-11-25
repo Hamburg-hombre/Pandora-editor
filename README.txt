@@ -32,6 +32,14 @@ Textures (Textures tab)
     original palette slot has (shown under the picture), so very colourful art gets quantised.
 
 Models (Model tab)
+  Animation playback: clicking an animation file (.nsbca/.nsbta/.nsbtp/.nsbma) in Advanced mode
+    plays it on its matching model immediately; opening a .nsbmd also auto-loads its .nsbca from
+    the Animations folder (exact name first, then names like auric_door_open for auric_door). The
+    dropdown lists every match so you can switch without browsing files; Play/Pause, the Frame
+    slider and Stop control playback. "Textured" draws the real textures into the view (needs
+    numpy); without it the animated model is shown as flat triangles. Companion NSBTA/NSBTP files
+    are applied when present. Keyframes use the nearest stored value (no blending), NSBMA material
+    colours and billboard nodes are not applied.
   View controls (all 3D views): drag = rotate, right-drag = pan, wheel = zoom, "Reset view" recentres.
   Export OBJ...            one OBJ object per shape, named shpNNN_<node>.
   Replace with any OBJ...  puts ANY OBJ into the selected model, whatever its object names or where it came

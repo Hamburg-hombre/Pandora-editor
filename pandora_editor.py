@@ -529,6 +529,16 @@ if tk is not None:
             self.data_char_raw = None
             self.data_swatches = []
             self.data_photo = None
+            self.anim_player = None        # animation playback state (Model tab)
+            self.anim_candidates = []
+            self.anim_path = None
+            self.anim_model = None
+            self.anim_frame = 0
+            self.anim_frames = 0
+            self.anim_tris = []
+            self.anim_photo = None
+            self.anim_playing = False
+            self.anim_after = None
             self.menu_images = []          # (block index, PIL Image, offset, w, h) for menu.tex
             self.menu_index = 0
             self.chr_doc = None
@@ -629,6 +639,31 @@ if tk is not None:
             ttk.Button(bar, text='Replace with any OBJ…', command=self.do_replace_obj).pack(side='right')
             ttk.Button(bar, text='Export OBJ…', command=self.do_export_one).pack(side='right')
             ttk.Label(bar, text='drag = rotate, right-drag = pan, wheel = zoom', foreground='gray').pack(side='left', padx=8)
+            # animation playback (Model tab)
+            abar = ttk.Frame(mt)
+            abar.pack(fill='x')
+            ttk.Label(abar, text='Animation:').pack(side='left')
+            self.anim_choice = ttk.Combobox(abar, state='readonly', width=26)
+            self.anim_choice.pack(side='left')
+            self.anim_choice.bind('<<ComboboxSelected>>', self.on_anim_choice)
+            self.btn_anim_play = ttk.Button(abar, text='Play', command=self.toggle_anim_play,
+                                            state='disabled')
+            self.btn_anim_play.pack(side='left', padx=4)
+            self.btn_anim_stop = ttk.Button(abar, text='Stop', command=self.stop_animation,
+                                            state='disabled')
+            self.btn_anim_stop.pack(side='left')
+            ttk.Label(abar, text='Frame').pack(side='left', padx=(10, 2))
+            self.anim_frame_var = tk.IntVar(value=0)
+            self.anim_scale = ttk.Scale(abar, from_=0, to=1, variable=self.anim_frame_var,
+                                       command=self.on_anim_scale, length=180)
+            self.anim_scale.pack(side='left')
+            self.anim_frame_label = ttk.Label(abar, text='0 / 0')
+            self.anim_frame_label.pack(side='left', padx=4)
+            self.anim_textured = tk.BooleanVar(value=True)
+            ttk.Checkbutton(abar, text='Textured', variable=self.anim_textured,
+                            command=self.redraw).pack(side='left', padx=(10, 0))
+            self.anim_info = ttk.Label(abar, foreground='#606060')
+            self.anim_info.pack(side='left', padx=8)
             cb = ttk.Frame(mt)
             cb.pack(fill='x', pady=(3, 0))
             ttk.Button(cb, text='Export collision OBJ…', command=self.do_export_collision).pack(side='left')
@@ -1469,6 +1504,7 @@ if tk is not None:
             for v in self.room_vars:
                 v.set('')
             self.view_tris = []
+            self.stop_animation(quiet=True)
             self._last_tex = None
             self.canvas.delete('all')
             if self.room_canvas is not None:
@@ -1485,6 +1521,9 @@ if tk is not None:
             self._clear_sounds()
             self.btn_revert.configure(state='normal' if self._has_backup(path) else 'disabled')
             name = os.path.basename(path)
+            if low.endswith(('.nsbca', '.nsbma', '.nsbta', '.nsbtp')):
+                if self.open_animation_file(path):
+                    return
             if soundmod.is_sound_file(path):
                 self.load_sounds(path)
                 return
@@ -1589,6 +1628,8 @@ if tk is not None:
                     self.show_texture()
             self.nb.select(0 if L.models else 1)
             self.reset_view()
+            if low.endswith('.nsbmd'):
+                self.auto_load_animation(path)          # no file picking needed
 
         def _set_text(self, txt, editable=False):
             self.text.configure(state='normal')
@@ -3585,6 +3626,207 @@ if tk is not None:
                           center[2] + sy_ * u - cy * sp * v), radius)
             self.redraw(fast=True)
 
+        def find_animations(self, model_path):
+            """Find .nsbca files that match a model, without asking the user.
+
+            Exact filename matches first, then names that start/end with the
+            model stem (auric_door -> auric_door_open, crusher -> crusherdown).
+            """
+            if not model_path:
+                return []
+            stem = os.path.splitext(os.path.basename(model_path))[0].lower()
+            folders = [os.path.join(self.work_var.get().strip(), 'Animations'),
+                       os.path.dirname(model_path)]
+            found = []
+            for folder in folders:
+                if not os.path.isdir(folder):
+                    continue
+                for f in os.listdir(folder):
+                    if not f.lower().endswith('.nsbca'):
+                        continue
+                    a = os.path.splitext(f)[0].lower()
+                    if a == stem:
+                        rank = 0
+                    elif a.startswith(stem) or a.endswith(stem):
+                        rank = 1
+                    else:
+                        continue
+                    p = os.path.join(folder, f)
+                    if p not in [x[1] for x in found]:
+                        found.append((rank, p))
+            found.sort(key=lambda x: (x[0], os.path.basename(x[1]).lower()))
+            return [p for _r, p in found]
+
+        def load_animation_path(self, p, model=None, quiet=False):
+            """Load a known animation path (no file dialog)."""
+            if not p:
+                return
+            try:
+                import anim_player
+                if model is None:
+                    stem = os.path.splitext(os.path.basename(p))[0]
+                    guesses = [os.path.join(self.work_var.get().strip(), 'Models', stem + '.nsbmd'),
+                               os.path.join(os.path.dirname(p), stem + '.nsbmd')]
+                    model = next((x for x in guesses if os.path.isfile(x)), None)
+                if model is None:
+                    raise ValueError('no matching .nsbmd for %s' % os.path.basename(p))
+                shared = None
+                for f in os.listdir(os.path.dirname(model)):
+                    if f.lower().endswith('.nsbtx'):
+                        shared = nitro.NSBTX(open(os.path.join(os.path.dirname(model), f), 'rb').read()).tex
+                        break
+                tris, info = anim_player.frame_triangles(model, p, 0, shared_tex=shared)
+            except Exception as e:
+                if quiet:
+                    self.anim_info.configure(text='animation unavailable: %s' % e)
+                    return
+                return messagebox.showerror('Animation', 'Could not load animation:\n%s' % e)
+            # reset playback only - keep the dropdown and its candidates intact
+            self.anim_playing = False
+            if self.anim_after:
+                try:
+                    self.after_cancel(self.anim_after)
+                except Exception:
+                    pass
+                self.anim_after = None
+            self.anim_player = anim_player
+            self.anim_model = model
+            self.anim_path = p
+            self.anim_shared = shared
+            self.anim_frames = max(1, int(info.get('frames', 1)))
+            self.anim_scale.configure(to=max(1, self.anim_frames - 1))
+            self.btn_anim_play.configure(state='normal')
+            self.btn_anim_stop.configure(state='normal')
+            extra = info.get('errors', [])
+            self.anim_info.configure(text='%s  (%d frames)%s' % (
+                os.path.basename(p), self.anim_frames,
+                ' - ' + '; '.join(extra[:1]) if extra else ''))
+            self.set_anim_frame(0)
+
+        def auto_load_animation(self, model_path):
+            """Pick the matching animation for a model automatically."""
+            cands = self.find_animations(model_path)
+            self.anim_candidates = cands
+            self.anim_choice['values'] = [os.path.basename(x) for x in cands]
+            if not cands:
+                self.anim_choice.set('')
+                self.anim_info.configure(text='no animation found for this model')
+                return
+            self.anim_choice.set(os.path.basename(cands[0]))
+            self.load_animation_path(cands[0], model=model_path, quiet=True)
+            if len(cands) > 1:
+                self.log('model %s: auto-loaded %s (%d animations available in the dropdown)'
+                         % (os.path.basename(model_path), os.path.basename(cands[0]), len(cands)))
+
+        def open_animation_file(self, path):
+            """Clicking an .nsbca in Advanced mode plays it on its model."""
+            stem = os.path.splitext(os.path.basename(path))[0].lower()
+            folders = [os.path.join(self.work_var.get().strip(), 'Models'),
+                       os.path.dirname(path)]
+            cands = []
+            for folder in folders:
+                if not os.path.isdir(folder):
+                    continue
+                for f in os.listdir(folder):
+                    if not f.lower().endswith('.nsbmd'):
+                        continue
+                    m = os.path.splitext(f)[0].lower()
+                    rank = 0 if m == stem else (1 if m in stem or stem in m else 2)
+                    if rank < 2:
+                        cands.append((rank, os.path.join(folder, f)))
+            cands.sort(key=lambda x: (x[0], os.path.basename(x[1]).lower()))
+            if not cands:
+                return False
+            model = cands[0][1]
+            self.anim_candidates = self.find_animations(model)
+            if path not in self.anim_candidates:
+                self.anim_candidates.insert(0, path)
+            self.anim_choice['values'] = [os.path.basename(x) for x in self.anim_candidates]
+            self.anim_choice.set(os.path.basename(path))
+            self.load_animation_path(path, model=model, quiet=True)
+            self.nb.select(0)
+            self.info.set('%s  -  animation %s playing on %s (%d frames)'
+                          % (os.path.basename(path), os.path.basename(path),
+                             os.path.basename(model), self.anim_frames))
+            return True
+
+        def on_anim_choice(self, _event=None):
+            name = self.anim_choice.get()
+            p = next((x for x in self.anim_candidates
+                      if os.path.basename(x) == name), None)
+            if p:
+                self.load_animation_path(p, model=getattr(self, 'anim_model', None))
+
+        def set_anim_frame(self, f):
+            if not self.anim_player or not self.anim_model:
+                return
+            f = max(0, min(self.anim_frames - 1, int(round(float(f)))))
+            try:
+                tris, info = self.anim_player.frame_triangles(
+                    self.anim_model, self.anim_path, f, shared_tex=getattr(self, 'anim_shared', None))
+            except Exception as e:
+                self.log('animation frame %d failed: %s' % (f, e))
+                return
+            self.anim_frame = f
+            self.anim_tris = tris
+            verts = [v for t in tris for v in t[0]]
+            if verts:
+                self.view = bounds([verts])
+            self.anim_frame_var.set(f)
+            self.anim_frame_label.configure(text='%d / %d' % (f + 1, self.anim_frames))
+            self.redraw(fast=True)
+
+        def on_anim_scale(self, _value=None):
+            if not self.anim_playing:
+                self.set_anim_frame(self.anim_frame_var.get())
+
+        def toggle_anim_play(self):
+            if self.anim_playing:
+                self.anim_playing = False
+                self.btn_anim_play.configure(text='Play')
+                if self.anim_after:
+                    self.after_cancel(self.anim_after)
+                    self.anim_after = None
+                return
+            if not self.anim_player:
+                return
+            self.anim_playing = True
+            self.btn_anim_play.configure(text='Pause')
+            self._anim_tick()
+
+        def _anim_tick(self):
+            if not self.anim_playing:
+                return
+            nxt = (self.anim_frame + 1) % max(1, self.anim_frames)
+            self.set_anim_frame(nxt)
+            self.anim_after = self.after(100, self._anim_tick)
+
+        def stop_animation(self, quiet=False):
+            self.anim_playing = False
+            if self.anim_after:
+                try:
+                    self.after_cancel(self.anim_after)
+                except Exception:
+                    pass
+                self.anim_after = None
+            self.anim_player = None
+            self.anim_path = None
+            self.anim_model = None
+            self.anim_tris = []
+            self.anim_frames = 0
+            self.anim_frame = 0
+            self.anim_candidates = []
+            self.anim_choice['values'] = []
+            self.anim_choice.set('')
+            self.btn_anim_play.configure(text='Play', state='disabled')
+            self.btn_anim_stop.configure(state='disabled')
+            self.anim_scale.configure(to=1)
+            self.anim_frame_var.set(0)
+            self.anim_frame_label.configure(text='0 / 0')
+            self.anim_info.configure(text='')
+            if not quiet:
+                self.redraw()
+
         def redraw(self, fast=False):
             c = self.canvas
             c.delete('all')
@@ -3607,6 +3849,20 @@ if tk is not None:
                     self._draw_lp(pc, max(pc.winfo_width(), 50), max(pc.winfo_height(), 50), fast)
 
         def _draw_tris(self, c, w, h, fast=False):
+            if self.anim_tris and self.anim_textured.get():
+                try:
+                    import soft_render
+                    center, radius = self.view
+                    step = max(1, len(self.anim_tris) // 1500) if fast else 1
+                    img = soft_render.render_textured(
+                        self.anim_tris, center, radius, self.yaw, self.pitch,
+                        self.zoom, w, h, step=step)
+                    self.anim_photo = ImageTk.PhotoImage(img)
+                    c.create_image(0, 0, anchor='nw', image=self.anim_photo)
+                except ImportError:
+                    c.create_text(w // 2, h // 2, anchor='center', fill='#ffcc66',
+                                  text='Textured animation needs numpy (pip install numpy)')
+                return
             tris = self.view_tris
             if not tris:
                 return
