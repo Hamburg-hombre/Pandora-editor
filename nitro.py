@@ -249,7 +249,7 @@ def parse_model(d, mpos, mdl_base):
         mat = dict(name=name, off=o, tex=None, pal=None,
                    param=U32(d, o + 0x14), plt_base=U16(d, o + 0x1C),
                    flag=U16(d, o + 0x1E),
-                   polyattr=U32(d, o + 8), diffamb=U32(d, o + 4))
+                   polyattr=U32(d, o + 0x0C), diffamb=U32(d, o + 4))
         mat['wrap'] = (mat['param'] >> 16) & 0xF      # bit0 repeatS, 1 repeatT, 2 flipS, 3 flipT
         fl, q = mat['flag'], o + 0x2C
         mat['tm_scale'], mat['tm_trans'] = (1.0, 1.0), (0.0, 0.0)
