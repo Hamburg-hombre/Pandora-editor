@@ -35,8 +35,9 @@ Templates.CRT: 95 AI template hashes at 0xB60+16*i and a parallel list of 95
 NUL-separated model names at 0x90B5, indexed by the same i.  The loader
 `viewer3d_model_map.load_ai_model_table()` reads it; the old instance-name
 patterns were unreliable and are now only a fallback.  Examples:
-  * Fort Knox: 37 of 40 spawns are GFT1 (Goldfinger's guards, w1 P90 Example
-    etc.), 3 are Oddjob (Long Bow / Jackal / Mamba templates).
+  * Fort Knox: all 40 spawns are GFT1 (Goldfinger's guards). The CRT table would
+    assign 3 of them (Long Bow / Jackal / Mamba templates) to Oddjob, but the
+    `e_gfe_*` instance names mark them as guards, so those win.
   * e_*_dnl_* in Hong Kong/Midas are mostly GFT1 or Oddjob, not dnl1.
   * e_vtm_* in multiplayer maps are playable characters (Goldfinger, etc.).
 The class hash at +0x0C of the 44-byte AI record is behaviour, not model:
@@ -50,6 +51,10 @@ Fog colour is read from the level's Script.NSLBC (nslbc_fog.py) when a level ope
 and shown in the Environment dialog with its source offset; picking a colour there
 overrides it. Fog near/far, sky background and lighting are still manual because the
 game stores no per-level values for them in the extracted files.
+
+Placed props also use level-specific models when there is no global name: the
+Elevator template picks `elev_hk1` (Auric/Hong Kong), `cas_elev` (Midas Casino)
+or `ck_elev` (Crab Key).
 
 If a model is missing or wrong, pick the correct one in the Properties panel;
 overrides are saved in viewer3d_data\_viewer3d_overrides.json (next to

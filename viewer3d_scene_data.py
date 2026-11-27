@@ -164,6 +164,7 @@ class ModelResolver:
 
     def __init__(self, work, level_dir):
         self.work, self.level_dir = work, level_dir
+        self.level_name = os.path.basename(os.path.normpath(level_dir))
         self.index = {}
         for d in (os.path.join(work, 'Models'), level_dir):          # level folder overrides
             if os.path.isdir(d):
@@ -225,7 +226,8 @@ class ModelResolver:
             m = self.by_w1.get('%08X' % w1)
         if m and m in self.index:
             return m, 'override'
-        m, how = model_map.builtin(w1, name, self.index, is_ai, self.ai_model_map)
+        m, how = model_map.builtin(w1, name, self.index, is_ai,
+                                   self.ai_model_map, self.level_name)
         if how == 'none':
             return None, None            # logical marker: draw a marker only
         if m:

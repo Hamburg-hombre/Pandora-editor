@@ -242,17 +242,39 @@ def _key(name):
     return re.sub(r'[^\w]', '', str(name).lower())
 
 
-def builtin(w1, name, index, is_ai=False, ai_table=None):
+LEVEL_MODEL = {
+    # The Elevator template (0x2EA3C8EE) uses a level-specific model.
+    '1_0_FortKnox': {0x2ea3c8ee: 'elev_hk1'},
+    '2_0_Auric': {0x2ea3c8ee: 'elev_hk1'},
+    '3_0_Hong_Kong': {0x2ea3c8ee: 'elev_hk1'},
+    '4_0_MidasCasino': {0x2ea3c8ee: 'cas_elev'},
+    '7_0_CrabKey': {0x2ea3c8ee: 'ck_elev'},
+}
+
+# Instance-name overrides that beat the AI template table: the e_gfe_* spawns
+# are Goldfinger's guards (GFT1), whatever weapon template they carry.
+AI_NAME_FIRST = (
+    ('e_gfe_', 'gft1'),
+)
+
+def builtin(w1, name, index, is_ai=False, ai_table=None, level=None):
     """Return (stem, how) or (None, None).
 
     `index` is the resolver's dict of available model stems -> path.
     """
+    if level and w1 in LEVEL_MODEL.get(level, {}):
+        stem = LEVEL_MODEL[level][w1]
+        return (stem, 'level') if stem in index else (None, None)
     if w1 in NO_MODEL_W1:
         return None, 'none'
     if w1 in W1_MODEL:
         stem = W1_MODEL[w1]
         return (stem, 'builtin') if stem in index else (None, None)
     if is_ai:
+        low = str(name).lower()
+        for pattern, stem in AI_NAME_FIRST:
+            if pattern in low and stem in index:
+                return stem, 'ai-name'
         stem = (ai_table or {}).get(w1) or AI_W1_MODEL.get(w1)
         if stem and stem in index:
             return stem, 'builtin'
