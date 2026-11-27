@@ -1,6 +1,6 @@
 """Main window: Mario Kart Toolbox 1680 RC1 style layout (menu strip, tool strips, left tab control,
 central 3D view, right property panel, status strip) with Pandora's colours and button look."""
-import os, json, math, tempfile
+import os, json, math, struct, tempfile
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, QRectF, QPointF, QSize, QEvent
 from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPen, QFont, QKeySequence, QBrush
@@ -8,10 +8,11 @@ from PySide6.QtWidgets import (QButtonGroup, QMainWindow, QWidget, QDockWidget, 
                                QLineEdit, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QDoubleSpinBox,
                                QComboBox, QCheckBox, QPushButton, QToolBar, QToolButton, QMessageBox,
                                QDialog, QDialogButtonBox, QColorDialog, QInputDialog, QStatusBar, QApplication, QGroupBox,
-                               QPlainTextEdit)
+                               QPlainTextEdit, QScrollArea, QSpinBox)
 
 from viewer3d_gl import GLView, marker_kind, KIND_COLORS
 import viewer3d_scene_data as sd
+import objects_lp as lpmod
 import viewer3d_paths as vpaths
 import nslbc_fog as nf
 
@@ -456,6 +457,8 @@ class MainWindow(QMainWindow):
     def _build_props(self):
         dock = QDockWidget('Properties', self)
         dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
         w = QWidget()
         lay = QVBoxLayout(w)
         self.p_name = QLabel('-')
@@ -464,6 +467,41 @@ class MainWindow(QMainWindow):
         self.p_info.setStyleSheet('color:#606060')
         lay.addWidget(self.p_name)
         lay.addWidget(self.p_info)
+
+        # Every field of an Objects.LP placement, plus the CHR name it points at.
+        ig = QGroupBox('Placement (Objects.LP record)')
+        inf = QFormLayout(ig)
+        self.p_edit_name = QLineEdit()
+        self.p_edit_name.editingFinished.connect(self._name_edited)
+        inf.addRow('Instance name (CHR)', self.p_edit_name)
+        self.p_h1 = QSpinBox()
+        self.p_h1.setRange(0, 65535)
+        self.p_h1.valueChanged.connect(self._h1_edited)
+        inf.addRow('Name index h1', self.p_h1)
+        self.p_kind = QComboBox()
+        self.p_kind.addItems(['static (flags 0)', 'trigger (flags 2)', 'AI (flags 8)'])
+        self.p_kind.currentIndexChanged.connect(self._kind_edited)
+        inf.addRow('Kind (flags)', self.p_kind)
+        self.p_size = QLabel('')
+        inf.addRow('Record size', self.p_size)
+        self.p_w0 = QLineEdit()
+        self.p_w0.editingFinished.connect(self._w0_edited)
+        inf.addRow('w0 (name hash)', self.p_w0)
+        self.p_w1 = QLineEdit()
+        self.p_w1.editingFinished.connect(self._w1_edited)
+        inf.addRow('w1 (template hash)', self.p_w1)
+        self.p_template = QLabel('')
+        inf.addRow('Template', self.p_template)
+        self.p_sent = QLineEdit()
+        self.p_sent.editingFinished.connect(self._sent_edited)
+        inf.addRow('sent (ref / FFFFFFFF)', self.p_sent)
+        self.p_typ = QSpinBox()
+        self.p_typ.setRange(0, 31)
+        self.p_typ.valueChanged.connect(self._typ_edited)
+        inf.addRow('typ (flags 0-31)', self.p_typ)
+        inf.addRow('Fixed markers', QLabel('0xCCCC / 0xCCCC / 0x0000 (format constants)'))
+        lay.addWidget(ig)
+
         gb = QGroupBox('Transform')
         form = QFormLayout(gb)
         self.pos_spin = [self._spin(-1e6, 1e6, 0.05, 3) for _ in range(3)]      # drag the number to scrub
@@ -474,10 +512,24 @@ class MainWindow(QMainWindow):
         for lbl, sp in zip('XYZ', self.rot_spin):
             form.addRow('Rotation ' + lbl + ' (deg)', sp)
             sp.valueChanged.connect(self._rot_edited)
-        self.p_brads = QLabel('')
-        self.p_brads.setStyleSheet('color:#606060')
-        form.addRow('Raw (4096/turn)', self.p_brads)
+        self.p_brads = QLineEdit()
+        self.p_brads.editingFinished.connect(self._brads_edited)
+        form.addRow('Raw (3 x s16, 4096/turn)', self.p_brads)
         lay.addWidget(gb)
+
+        tg = QGroupBox('Trigger box (24 extra bytes, 12.12)')
+        tf = QFormLayout(tg)
+        self.p_box = [self._spin(-2**31, 2**31 - 1, 1.0, 0) for _ in range(6)]
+        for lbl, sp in zip(('min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z'), self.p_box):
+            tf.addRow(lbl + ' (offset)', sp)
+            i = ('min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z').index(lbl)
+            sp.valueChanged.connect(lambda _, i=i: self._box_edited(i))
+        self.p_box_world = QLabel('')
+        self.p_box_world.setWordWrap(True)
+        tf.addRow('World min / max', self.p_box_world)
+        self.trigger_group = tg
+        lay.addWidget(tg)
+
         mg = QGroupBox('Model')
         mf = QFormLayout(mg)
         self.model_combo = QComboBox()
@@ -494,8 +546,13 @@ class MainWindow(QMainWindow):
         for b in (b1, b2, b3):
             mf.addRow(b)
         lay.addWidget(mg)
+
+        self.p_visible = QCheckBox('Visible in viewer')
+        self.p_visible.toggled.connect(self._visible_toggled)
+        lay.addWidget(self.p_visible)
         lay.addStretch(1)
-        dock.setWidget(w)
+        scroll.setWidget(w)
+        dock.setWidget(scroll)
         dock.setMinimumWidth(300)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self._set_props_enabled(False)
@@ -508,9 +565,15 @@ class MainWindow(QMainWindow):
         return s
 
     def _set_props_enabled(self, on):
-        for s in self.pos_spin + self.rot_spin:
+        for s in self.pos_spin + self.rot_spin + self.p_box:
             s.setEnabled(on)
+        for e in (self.p_edit_name, self.p_w0, self.p_w1, self.p_sent, self.p_brads):
+            e.setEnabled(on)
+        for s in (self.p_h1, self.p_typ):
+            s.setEnabled(on)
+        self.p_kind.setEnabled(on)
         self.model_combo.setEnabled(on)
+        self.p_visible.setEnabled(on)
 
     # ------------------------------------------------------------------ options
     def _set_opt(self, k, on):
@@ -752,12 +815,34 @@ class MainWindow(QMainWindow):
                 self.p_name.setText('Nothing selected')
                 self.p_info.setText('')
                 self.p_how.setText('')
+                self.trigger_group.setVisible(False)
                 self.obj_tree.clearSelection()
                 return
             self.p_name.setText('<b>%s</b>' % o.name)
             self.p_info.setText('%s placement #%d, template %08X\nsource: %s' % (
                 o.kind, o.idx, o.rec.w1, os.path.basename(lv.lp_path)))
+            r = o.rec
+            self.p_edit_name.setText(o.name)
+            self.p_h1.setValue(r.h1)
+            self.p_kind.setCurrentIndex({0: 0, 2: 1, 8: 2}.get(r.flags, 0))
+            self.p_size.setText('0x%02X (%d bytes)' % (r.size, r.size))
+            self.p_w0.setText('%08X' % r.w0)
+            self.p_w1.setText('%08X' % r.w1)
+            self.p_template.setText(lv.template_names.get(r.w1, '-'))
+            self.p_sent.setText('%08X' % r.sent)
+            self.p_typ.setValue(r.typ)
             self._refresh_transform(o)
+            self.trigger_group.setVisible(r.is_trigger)
+            if r.is_trigger and r.extra6 and len(r.extra6) == 24:
+                offs = struct.unpack('<6i', r.extra6)
+                for s, v in zip(self.p_box, offs):
+                    s.setValue(v)
+                lo, hi = o.trigger_box()
+                self.p_box_world.setText('(%s) .. (%s)' % (
+                    ', '.join('%.2f' % v for v in lo), ', '.join('%.2f' % v for v in hi)))
+            else:
+                self.p_box_world.setText('not a trigger record')
+            self.p_visible.setChecked(o.visible)
             stems = sorted(lv.resolver.index.keys()) if lv.resolver else []
             self.model_combo.clear()
             self.model_combo.addItems([''] + stems)
@@ -784,6 +869,186 @@ class MainWindow(QMainWindow):
             s.setValue(v * 360.0 / 4096.0)
         self.p_brads.setText('%d, %d, %d' % e)
         self._updating = False
+
+    # ------------------------------------------------- editable placement fields
+    @staticmethod
+    def _hex32(text):
+        try:
+            return int(str(text).strip(), 16) & 0xffffffff
+        except (TypeError, ValueError):
+            return None
+
+    def _refresh_after_edit(self, o, resolve=False):
+        lv = self.view.level
+        o.dirty = True
+        if resolve and lv and lv.resolver:
+            o.model, o.how = lv.resolver.resolve(o.rec.w1, o.name, o.rec.is_ai)
+            self.view.ensure_models()
+        self.view.object_changed(o.idx)
+        self._fill_objects()
+        self._on_selected(o.idx)
+        self._update_title()
+
+    def _name_edited(self):
+        if self._updating:
+            return
+        o, lv = self.view.sel_obj(), self.view.level
+        if not o or not lv:
+            return
+        name = self.p_edit_name.text().strip()
+        if not name:
+            self.p_edit_name.setText(o.name)
+            return
+        if name == o.name:
+            return
+        if lv.chr is None or not (0 <= o.rec.h1 < len(lv.chr.strings)):
+            QMessageBox.warning(self, 'Name', 'This record has no valid CodeStrings.CHR slot.')
+            self.p_edit_name.setText(o.name)
+            return
+        lv.chr.strings[o.rec.h1] = name
+        o.name = name
+        o.rec.w0 = lpmod.java31(name)
+        lv.chr_dirty = True
+        self._refresh_after_edit(o, resolve=True)
+
+    def _h1_edited(self):
+        if self._updating:
+            return
+        o, lv = self.view.sel_obj(), self.view.level
+        if not o or not lv or not lv.chr:
+            return
+        idx = self.p_h1.value()
+        if idx == o.rec.h1:
+            return
+        if not (0 <= idx < len(lv.chr.strings)):
+            QMessageBox.warning(self, 'Name index', 'No CodeStrings.CHR string at slot %d.' % idx)
+            self.p_h1.setValue(o.rec.h1)
+            return
+        o.rec.h1 = idx
+        o.name = lv.chr.strings[idx]
+        o.rec.w0 = lpmod.java31(o.name)
+        self._refresh_after_edit(o, resolve=True)
+
+    def _w0_edited(self):
+        if self._updating:
+            return
+        o = self.view.sel_obj()
+        if not o:
+            return
+        v = self._hex32(self.p_w0.text())
+        if v is None:
+            self.p_w0.setText('%08X' % o.rec.w0)
+            return
+        o.rec.w0 = v
+        if v != lpmod.java31(o.name):
+            self.sb.showMessage('w0 does not match java31(instance name) - edit the name to keep them in sync', 5000)
+        self._refresh_after_edit(o)
+
+    def _w1_edited(self):
+        if self._updating:
+            return
+        o, lv = self.view.sel_obj(), self.view.level
+        if not o:
+            return
+        v = self._hex32(self.p_w1.text())
+        if v is None:
+            self.p_w1.setText('%08X' % o.rec.w1)
+            return
+        o.rec.w1 = v
+        self.p_template.setText((lv.template_names if lv else {}).get(v, '-'))
+        self._refresh_after_edit(o, resolve=True)
+
+    def _sent_edited(self):
+        if self._updating:
+            return
+        o = self.view.sel_obj()
+        if not o:
+            return
+        v = self._hex32(self.p_sent.text())
+        if v is None:
+            self.p_sent.setText('%08X' % o.rec.sent)
+            return
+        o.rec.sent = v
+        self._refresh_after_edit(o)
+
+    def _typ_edited(self):
+        if self._updating:
+            return
+        o = self.view.sel_obj()
+        if o:
+            o.rec.typ = self.p_typ.value()
+            self._refresh_after_edit(o)
+
+    def _kind_edited(self):
+        if self._updating:
+            return
+        o = self.view.sel_obj()
+        if not o:
+            return
+        flags = (0, 2, 8)[self.p_kind.currentIndex()]
+        r = o.rec
+        r.flags = flags
+        r.size = 0x44 if flags == 2 else 0x2C
+        if flags == 2:
+            if not r.extra6 or len(r.extra6) != 24:
+                r.extra6 = b'\x00' * 24
+        else:
+            r.extra6 = None
+        o.kind = 'trigger' if flags == 2 else ('ai' if flags == 8 else 'static')
+        self._refresh_after_edit(o, resolve=True)
+
+    def _box_edited(self, i):
+        if self._updating:
+            return
+        o = self.view.sel_obj()
+        if not o or not o.rec.is_trigger or not o.rec.extra6:
+            return
+        vals = list(struct.unpack('<6i', o.rec.extra6))
+        vals[i] = int(self.p_box[i].value())
+        o.rec.extra6 = struct.pack('<6i', *vals)
+        lo, hi = o.trigger_box()
+        self.p_box_world.setText('(%s) .. (%s)' % (
+            ', '.join('%.2f' % v for v in lo), ', '.join('%.2f' % v for v in hi)))
+        self._refresh_after_edit(o)
+
+    def _brads_edited(self):
+        if self._updating:
+            return
+        o = self.view.sel_obj()
+        if not o:
+            return
+        parts = [p for p in self.p_brads.text().replace(',', ' ').split() if p]
+        try:
+            vals = [int(p) for p in parts]
+            if len(vals) != 3:
+                raise ValueError
+        except ValueError:
+            self.p_brads.setText('%d, %d, %d' % o.euler)
+            return
+        vals = [max(-32768, min(32767, v)) for v in vals]
+        o.rec.tail6 = struct.pack('<3h', *vals)
+        for s, v in zip(self.rot_spin, vals):
+            s.blockSignals(True)
+            s.setValue(v * 360.0 / 4096.0)
+            s.blockSignals(False)
+        self._refresh_after_edit(o)
+
+    def _visible_toggled(self, on):
+        if self._updating:
+            return
+        o = self.view.sel_obj()
+        if not o:
+            return
+        o.visible = bool(on)
+        self.obj_tree.blockSignals(True)
+        for i in range(self.obj_tree.topLevelItemCount()):
+            it = self.obj_tree.topLevelItem(i)
+            if it.data(0, Qt.UserRole) == o.idx:
+                it.setCheckState(0, Qt.Checked if o.visible else Qt.Unchecked)
+                break
+        self.obj_tree.blockSignals(False)
+        self.view.markers_dirty = True
+        self.view.update()
 
     def _on_edited(self, idx):
         o = self.view.level.objects[idx]
@@ -875,8 +1140,12 @@ class MainWindow(QMainWindow):
         if not lv or not lv.lp:
             return
         try:
+            saved_chr = bool(lv.chr_dirty)
             lv.save_lp(lambda m: self.sb.showMessage(m, 8000))
-            self.sb.showMessage('Saved Objects.LP - press the reload button on Pandora\'s .lp tab, then Repack ROM.', 10000)
+            if saved_chr:
+                lv.save_chr(lambda m: self.sb.showMessage(m, 8000))
+            self.sb.showMessage('Saved Objects.LP%s - press the reload button on Pandora\'s .lp tab, then Repack ROM.' % (
+                ' and CodeStrings.CHR' if saved_chr else ''), 10000)
         except Exception as e:
             QMessageBox.critical(self, 'Save failed', str(e))
         self._update_title()

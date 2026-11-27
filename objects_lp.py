@@ -168,14 +168,19 @@ def load_chr(path):
 
 
 # ---------------------------------------------------------------- templates
+def java31(name):
+    """The game's 32-bit Java-style string hash (uppercase, h = h*31 + char)."""
+    h = 0
+    for c in str(name).upper():
+        h = (h * 31 + ord(c)) & 0xffffffff
+    return h
+
+
 def _hash_to_name(names):
     """{java31(name.upper()): name} for a list of resource names."""
     out = {}
     for nm in names:
-        h = 0
-        for c in nm.upper():
-            h = (h * 31 + ord(c)) & 0xffffffff
-        out.setdefault(h, nm)
+        out.setdefault(java31(nm), nm)
     return out
 
 

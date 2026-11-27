@@ -302,8 +302,11 @@ class Level:
         self.rooms = []                  # [{'name','bmin','bmax','flags'}]
         self.objects = []
         self.chr = None
+        self.chr_path = None
+        self.chr_dirty = False
         self.lp = None
         self.lp_path = None
+        self.template_names = {}         # w1 -> readable template name
         self.paths = []                  # [(nodes Nx3, edges [(a,b)])]
         self.resolver = None
         self.bmin = np.array([-10.0] * 3)
@@ -374,7 +377,10 @@ class Level:
             try:
                 lv.lp = lpmod.parse(lp_p)
                 lv.lp_path = lp_p
-                lv.chr = lpmod.load_chr(chr_p) if os.path.isfile(chr_p) else None
+                lv.template_names = {d['w1']: d['name'] for d in lpmod.load_template_details(
+                    os.path.join(work, 'Templates.CRT'), os.path.join(work, 'Global.LVL'))}
+                lv.chr_path = chr_p if os.path.isfile(chr_p) else None
+                lv.chr = lpmod.load_chr(chr_p) if lv.chr_path else None
                 lv.resolver = ModelResolver(work, d)
                 names = [lv.chr.strings[r.h1] if lv.chr and r.h1 < len(lv.chr.strings) else 'h1_%d' % r.h1
                          for r in lv.lp.records()]
@@ -449,6 +455,22 @@ class Level:
         for o in self.objects:
             o.dirty = False
         log('saved %s (%d bytes)' % (self.lp_path, len(data)))
+        return True
+
+    def save_chr(self, log=print):
+        """Write CodeStrings.CHR after a name edit (same _backup convention)."""
+        if self.chr is None or not self.chr_path:
+            return False
+        rel = os.path.relpath(self.chr_path, self.work)
+        dest = os.path.join(self.work, '_backup', rel)
+        if not os.path.exists(dest):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(self.chr_path, dest)
+        data = self.chr.to_bytes()
+        with open(self.chr_path, 'wb') as f:
+            f.write(data)
+        self.chr_dirty = False
+        log('saved %s (%d bytes)' % (self.chr_path, len(data)))
         return True
 
 

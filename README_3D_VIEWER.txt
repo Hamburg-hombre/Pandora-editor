@@ -66,6 +66,28 @@ AI spawns never use the placed-prop table: the `TankTop` hash is also a prop
 template, but the three `TankTop*` spawns in Crab Key are enemies and use the
 `tank` character model (from the spawn-name alias), not the `tanktop` prop.
 
+Properties panel
+----------------
+Selecting a placement shows every field of its Objects.LP record and makes the
+editable ones writable:
+
+  * Instance name (CodeStrings.CHR), name index h1, and the w0 instance hash.
+    Editing the name updates w0 = java31(name) and the CHR string; Save writes
+    both Objects.LP and CodeStrings.CHR (each backed up to <work>/_backup).
+  * Kind (flags 0/2/8), w1 template hash (with the resolved template name),
+    `sent` reference, `typ` flags and the record size.  Changing kind also
+    changes the record size and adds/removes the 24 trigger-box bytes.
+  * Position X/Y/Z, rotation X/Y/Z in degrees and the three raw 16-bit values
+    in the record's tail (4096 steps per turn).
+  * For triggers: all six 12.12 box offsets (min/max X/Y/Z relative to the
+    placement) and the resulting world-space min/max.
+  * Model shown, its source, the three name/template override buttons and the
+    viewer-only visibility checkbox.
+
+The `0xCCCC` markers and the trailing zero are format constants: they are shown
+but cannot be edited because the Objects.LP parser rejects any other value.
+The record size is derived from the kind for the same reason.
+
 If a model is missing or wrong, pick the correct one in the Properties panel;
 overrides are saved in viewer3d_data\_viewer3d_overrides.json (next to
 pandora_editor.py) and always win.
