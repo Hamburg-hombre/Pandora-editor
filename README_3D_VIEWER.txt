@@ -30,24 +30,21 @@ at every Fort Knox waypoint).
 
 Enemy models
 ------------
-All 711 AI spawns now get a character model.  Two sources were used:
-  * 8 boss templates whose template name IS a model resource name (Scaramanga,
-    Oddjob, Goldfinger, Dr. No, Onatopp, VT BOT, Triad Informer, Mini Osprey).
-    The link is exact: java31(template name) equals the model name's hash.
-  * the other templates are "X Example" weapon/archetype variants.  Their
-    44-byte records in Templates.CRT (at 0x4148 + 44*i, parallel to the 95
-    kind-11 template hashes) hold an animation-set hash at +0x10 and a weapon
-    hash at +0x14, but no character-model hash.  The character is encoded in
-    the spawn's instance name instead: e_*_dnl_* -> dnl1, e_*_spc_* ->
-    spectre_guard, e_*_tt_* -> triad_thug, e_vtm_* -> spectre_guard, plus
-    finalocto -> octoguard, TankTop -> tanktop, e_RocketMan -> foo_rocket.
-    These are named by the level designer, so they are marked "AI spawn name
-    (inferred)" in the Properties panel rather than presented as exact.
+All 711 AI spawns get a character model from the authoritative table in
+Templates.CRT: 95 AI template hashes at 0xB60+16*i and a parallel list of 95
+NUL-separated model names at 0x90B5, indexed by the same i.  The loader
+`viewer3d_model_map.load_ai_model_table()` reads it; the old instance-name
+patterns were unreliable and are now only a fallback.  Examples:
+  * Fort Knox: 37 of 40 spawns are GFT1 (Goldfinger's guards, w1 P90 Example
+    etc.), 3 are Oddjob (Long Bow / Jackal / Mamba templates).
+  * e_*_dnl_* in Hong Kong/Midas are mostly GFT1 or Oddjob, not dnl1.
+  * e_vtm_* in multiplayer maps are playable characters (Goldfinger, etc.).
+The class hash at +0x0C of the 44-byte AI record is behaviour, not model:
+0x76fd69ba = CROUCH, 0x04102685 = GUARD, 0x00267729 = ROAM.
 
-Also note: AI NEO AGENT in Global.LVL is a spawn-name list, not a template-name
-list - matching it positionally to the kind-11 hashes gives 0/95 hash matches.
-objects_lp.py now resolves template names by hash against all Global.LVL
-sections and the CRT string table (e.g. P90 Example, Goldfinger) instead.
+AI NEO AGENT in Global.LVL is a spawn-name list, not a template-name list -
+matching it positionally to the kind-11 hashes gives 0/95 hash matches.
+objects_lp.py resolves template names by hash instead.
 
 Fog colour is read from the level's Script.NSLBC (nslbc_fog.py) when a level opens
 and shown in the Environment dialog with its source offset; picking a colour there

@@ -180,6 +180,8 @@ class ModelResolver:
             except Exception:
                 pass
         self.auto_w1 = {}
+        # Authoritative AI template -> model table from Templates.CRT.
+        self.ai_model_map = model_map.load_ai_model_table(work)
 
     def save_overrides(self):
         with open(vpaths.save_path(self.OVERRIDES), 'w') as f:
@@ -223,7 +225,7 @@ class ModelResolver:
             m = self.by_w1.get('%08X' % w1)
         if m and m in self.index:
             return m, 'override'
-        m, how = model_map.builtin(w1, name, self.index, is_ai)
+        m, how = model_map.builtin(w1, name, self.index, is_ai, self.ai_model_map)
         if how == 'none':
             return None, None            # logical marker: draw a marker only
         if m:

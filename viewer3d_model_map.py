@@ -22,6 +22,7 @@ comes from each instance's own name (decorations, zip lines).
 
 The full evidence table is in ../mapping/objects_to_models.md.
 """
+import os
 
 # w1 -> model file stem (lowercase, matches work/Models/<stem>.nsbmd).
 W1_MODEL = {
@@ -78,17 +79,85 @@ W1_MODEL = {
     0x0b101b9f: 'mini_game_panel', # Mini Game Panel (STR_Button*)
 }
 
+# ------------------------------------------------------------------ CRT table
+AI_MODEL_STRINGS_OFF = 0x90B5       # 95 NUL-separated model names
+AI_HASHES_OFF = 0xB60               # 95 x {u32 hash, u32 kind, u32 flags, u32 idx}
+AI_TABLE_COUNT = 95
+
+
+def load_ai_model_table(work):
+    """Return {w1: model stem} from Templates.CRT's parallel arrays.
+
+    The Nth AI template hash at 0xB60+16*N corresponds to the Nth NUL string at
+    0x90B5, which is the character model resource used for that template.
+    This is the game's authoritative mapping (verified: every hash-resolvable
+    template name lands on its matching model string at the same index).
+    """
+    import struct
+    out = {}
+    try:
+        path = os.path.join(work, 'Templates.CRT')
+        crt = open(path, 'rb').read()
+        strings = []
+        off = AI_MODEL_STRINGS_OFF
+        for _ in range(AI_TABLE_COUNT):
+            end = crt.find(b'\x00', off)
+            if end < 0:
+                break
+            strings.append(crt[off:end].decode('latin-1').lower())
+            off = end + 1
+        if len(strings) != AI_TABLE_COUNT:
+            return out
+        for i, nm in enumerate(strings):
+            h = struct.unpack_from('<I', crt, AI_HASHES_OFF + 16 * i)[0]
+            if h and nm:
+                out[h] = nm
+    except Exception:
+        pass
+    return out
+
+
 # AI template hash -> character model.  These 8 template names are themselves
 # character resource names (Global.LVL / CRT strings), so the link is direct.
 AI_W1_MODEL = {
-    0xc6eae5b4: 'scaramanga',       # Scaramanga
-    0x8aad202e: 'oddjob',           # Oddjob
-    0xe11a27c9: 'goldfinger',       # Goldfinger
-    0x03e40693: 'dr_no',            # Dr. No
-    0xdbe1a2fd: 'xenia_onatopp',    # Onatopp
-    0x97700945: 'vt_bot',           # VT BOT
-    0xe6abb636: 'triad_informant',  # Triad Informer (Mini-Boss)
-    0xb88ab09a: 'v_miniosp',        # Vehicle (Mini Osprey)
+    # Full fallback table from Templates.CRT's AI model-name array at 0x90B5.
+    # The dynamic loader overrides this when Templates.CRT is available.
+    0xfa83f179: 'gft1', 0x07b148c5: 'gft1', 0x87248fb4: 'gft1',
+    0x0394644d: 'gft1', 0x90bd1591: 'gft1', 0x5fb059ed: 'gft1',
+    0x4811eed1: 'gft1', 0x274f48c0: 'gft1', 0xea42449d: 'gft1',
+    0xa847487e: 'gft1', 0xcfa084d7: 'gft1', 0xf210a519: 'gft1',
+    0x3f867a12: 'gft1', 0xedaa34c7: 'gft1', 0xc907d7f7: 'gft1',
+    0x4e4f4fdc: 'gft1', 0xe177fa8e: 'gft1',
+    0x0259d73b: 'oddjob', 0xc8e3bde8: 'oddjob', 0x89069ea6: 'oddjob',
+    0x87b7ae94: 'oddjob', 0x86ea9510: 'oddjob', 0x9c9d2a92: 'oddjob',
+    0x2e1f7db3: 'oddjob', 0x5eec7b74: 'oddjob', 0xa11a8130: 'oddjob',
+    0xf2b34862: 'oddjob', 0xb0562c01: 'oddjob', 0x05575531: 'oddjob',
+    0xa7b0ad12: 'oddjob', 0xab8852bc: 'oddjob', 0xff459df3: 'oddjob',
+    0x9f49a721: 'oddjob', 0x6671c458: 'oddjob', 0x06f17894: 'oddjob',
+    0x8aad202e: 'oddjob', 0x0c548bd0: 'oddjob', 0x102ba417: 'oddjob',
+    0xfb68cf59: 'oddjob', 0x9354aa36: 'oddjob', 0x838ca0ef: 'oddjob',
+    0xa2db5056: 'dnl1', 0x3822005d: 'dnl1', 0x790c75a7: 'dnl1', 0x63b5a338: 'dnl1',
+    0xa2bb2844: 'dnl3', 0x3801d84b: 'dnl3', 0x7ffc3ed7: 'dnl3', 0x63b5a319: 'dnl3',
+    0x7bb08b30: 'dr_no', 0xf7a09ff8: 'dr_no', 0x54e5400c: 'dr_no',
+    0xe3e7dce0: 'goldfinger', 0x4d6f4148: 'goldfinger',
+    0xa33edded: 'goldfinger', 0xe11a27c9: 'goldfinger',
+    0x23fef26b: 'goldfinger', 0xa4aea584: 'goldfinger',
+    0x12d3e3ae: 'goldfinger', 0xf07ace4e: 'goldfinger',
+    0x53b1f586: 'goldeneye', 0x8122fb4d: 'goldeneye',
+    0x34b856b5: 'goldeneye', 0x34b1e379: 'goldeneye', 0x624dd34f: 'goldeneye',
+    0xb093d063: 'octoguard', 0xb08d5d27: 'octoguard',
+    0x52a4c2be: 'octoguard', 0x512ddafc: 'octoguard',
+    0x713f28be: 'pussy_galore', 0x84ce7997: 'pussy_galore',
+    0xc6eae5b4: 'scaramanga', 0x09cfb056: 'scaramanga',
+    0x8a7f636f: 'scaramanga', 0xca955d31: 'scaramanga',
+    0x39b28fe5: 'spectre_guard', 0xba6242fe: 'spectre_guard', 0x8125bbef: 'spectre_guard',
+    0xc1d5809e: 'tank',
+    0xe6abb636: 'triad_informant', 0x85f359aa: 'triad_informant', 0xb8c4ae31: 'triad_informant',
+    0x6c88109a: 'triad_thug', 0xed37c3b3: 'triad_thug',
+    0xb88ab09a: 'v_miniosp',
+    0x97700945: 'vt_bot', 0x586eb04c: 'vt_bot',
+    0xdbe1a2fd: 'xenia_onatopp', 0x8f27ab9b: 'xenia_onatopp',
+    0xd2dd7722: 'xenia_onatopp', 0x2e3110f8: 'xenia_onatopp', 0xa12445c6: 'xenia_onatopp',
 }
 
 # The other ~80 AI templates are weapon/archetype variants ("P90 Example",
@@ -107,12 +176,9 @@ AI_NAME_MODEL = [
     ('rocketman', 'foo_rocket'),
     ('cine_osprey', 'v_osprey'),
     ('e_r9_tt_informant', 'triad_informant'),
-    ('_dnl_', 'dnl1'),              # Dr. No lackeys (story levels)
-    ('_spc_', 'spectre_guard'),     # Spectre guards (Volcano Lair)
-    ('_tt_', 'triad_thug'),         # Triad thugs (Hong Kong)
-    ('e_gfe_', 'dnl1'),             # story guards (Fort Knox / Auric / Crab Key)
-    ('e_guards_', 'dnl1'),
-    ('e_vtm', 'spectre_guard'),     # multiplayer enemies
+    # Instance-name prefixes are NOT reliable model indicators: the CRT table
+    # above is authoritative.  Only keep patterns that are direct evidence.
+    ('e_gfe_', 'gft1'),             # fallback only, when the CRT table is absent
 ]
 
 # Templates that place different models depending on the instance name.
@@ -176,7 +242,7 @@ def _key(name):
     return re.sub(r'[^\w]', '', str(name).lower())
 
 
-def builtin(w1, name, index, is_ai=False):
+def builtin(w1, name, index, is_ai=False, ai_table=None):
     """Return (stem, how) or (None, None).
 
     `index` is the resolver's dict of available model stems -> path.
@@ -187,7 +253,7 @@ def builtin(w1, name, index, is_ai=False):
         stem = W1_MODEL[w1]
         return (stem, 'builtin') if stem in index else (None, None)
     if is_ai:
-        stem = AI_W1_MODEL.get(w1)
+        stem = (ai_table or {}).get(w1) or AI_W1_MODEL.get(w1)
         if stem and stem in index:
             return stem, 'builtin'
         low = str(name).lower()
