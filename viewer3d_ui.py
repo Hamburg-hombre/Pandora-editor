@@ -2,13 +2,13 @@
 central 3D view, right property panel, status strip) with Pandora's colours and button look."""
 import os, json, math, struct, tempfile
 import numpy as np
-from PySide6.QtCore import Qt, QTimer, QRectF, QPointF, QSize, QEvent
+from PySide6.QtCore import Qt, QTimer, QRectF, QPointF, QSize, QEvent, QObject
 from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPen, QFont, QKeySequence, QBrush
 from PySide6.QtWidgets import (QButtonGroup, QMainWindow, QWidget, QDockWidget, QTabWidget, QTreeWidget, QTreeWidgetItem,
                                QLineEdit, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QDoubleSpinBox,
                                QComboBox, QCheckBox, QPushButton, QToolBar, QToolButton, QMessageBox,
                                QDialog, QDialogButtonBox, QColorDialog, QInputDialog, QStatusBar, QApplication, QGroupBox,
-                               QPlainTextEdit, QScrollArea, QSpinBox)
+                               QPlainTextEdit, QScrollArea, QSpinBox, QToolTip)
 
 from viewer3d_gl import GLView, marker_kind, KIND_COLORS
 import viewer3d_scene_data as sd
@@ -82,6 +82,19 @@ class DragSpin(QDoubleSpinBox):
                     self.lineEdit().selectAll()
                 return True
         return super().eventFilter(obj, e)
+
+
+class LongTipFilter(QObject):
+    """Give every widget tooltip a long duration instead of Qt's short timeout."""
+
+    DURATION = 600000                     # ms; effectively until the mouse moves away
+
+    def eventFilter(self, obj, e):
+        if e.type() == QEvent.ToolTip and hasattr(obj, 'toolTip') and obj.toolTip():
+            pos = e.globalPosition().toPoint() if hasattr(e, 'globalPosition') else e.globalPos()
+            QToolTip.showText(pos, obj.toolTip(), obj, obj.rect(), self.DURATION)
+            return True
+        return False
 
 
 class ViewCubeNet(QWidget):
@@ -277,6 +290,9 @@ class MainWindow(QMainWindow):
         self.undo = []
         self._last_undo = (None, 0.0)
         self._updating = False
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(LongTipFilter(app))
 
         self.view = GLView()
         self.view.attach_model_cache(self.model_cache)
@@ -454,6 +470,14 @@ class MainWindow(QMainWindow):
         dock.setMinimumWidth(300)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
 
+    @staticmethod
+    def _field_row(form, label, widget, tip):
+        """Add a labelled field whose label and widget both explain the field."""
+        lab = QLabel(label)
+        lab.setToolTip(tip)
+        widget.setToolTip(tip)
+        form.addRow(lab, widget)
+
     def _build_props(self):
         dock = QDockWidget('Properties', self)
         dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
@@ -462,84 +486,129 @@ class MainWindow(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
         self.p_name = QLabel('-')
+        self.p_name.setToolTip('The selected placement. Its name comes from CodeStrings.CHR.')
         self.p_info = QLabel('')
         self.p_info.setWordWrap(True)
         self.p_info.setStyleSheet('color:#606060')
+        self.p_info.setToolTip('Record index, kind, template hash and source file of the selected placement.')
         lay.addWidget(self.p_name)
         lay.addWidget(self.p_info)
 
         # Every field of an Objects.LP placement, plus the CHR name it points at.
         ig = QGroupBox('Placement (Objects.LP record)')
+        ig.setToolTip('The raw fields stored in one 44- or 68-byte record of the level\'s Objects.LP file.')
         inf = QFormLayout(ig)
         self.p_edit_name = QLineEdit()
         self.p_edit_name.editingFinished.connect(self._name_edited)
-        inf.addRow('Instance name (CHR)', self.p_edit_name)
+        self._field_row(inf, 'Instance name (CHR)', self.p_edit_name,
+                        'Name in this level\'s CodeStrings.CHR. Editing it rewrites that name slot and '
+                        'sets w0 = java31(NAME). Save writes both Objects.LP and CodeStrings.CHR.')
         self.p_h1 = QSpinBox()
         self.p_h1.setRange(0, 65535)
         self.p_h1.valueChanged.connect(self._h1_edited)
-        inf.addRow('Name index h1', self.p_h1)
+        self._field_row(inf, 'Name index h1', self.p_h1,
+                        'Index into CodeStrings.CHR that supplies this placement\'s name. Changing it '
+                        'points the record at a different string and recomputes w0.')
         self.p_kind = QComboBox()
         self.p_kind.addItems(['static (flags 0)', 'trigger (flags 2)', 'AI (flags 8)'])
         self.p_kind.currentIndexChanged.connect(self._kind_edited)
-        inf.addRow('Kind (flags)', self.p_kind)
+        self._field_row(inf, 'Kind (flags)', self.p_kind,
+                        'Record type: 0 = placed object, 2 = trigger volume, 8 = enemy spawn. Changing it '
+                        'also changes the record size and adds/removes the 24 trigger-box bytes.')
         self.p_size = QLabel('')
-        inf.addRow('Record size', self.p_size)
+        self._field_row(inf, 'Record size', self.p_size,
+                        'Byte size in Objects.LP: 44 for static/AI, 68 for a trigger. Derived from the '
+                        'kind, so it cannot be edited directly.')
         self.p_w0 = QLineEdit()
         self.p_w0.editingFinished.connect(self._w0_edited)
-        inf.addRow('w0 (name hash)', self.p_w0)
+        self._field_row(inf, 'w0 (name hash)', self.p_w0,
+                        'java31 hash of the uppercase instance name. Editing the name keeps this in sync; '
+                        'a raw edit here is allowed but will warn if it no longer matches the name.')
         self.p_w1 = QLineEdit()
         self.p_w1.editingFinished.connect(self._w1_edited)
-        inf.addRow('w1 (template hash)', self.p_w1)
+        self._field_row(inf, 'w1 (template hash)', self.p_w1,
+                        'java31 hash of the object or AI template name. Changing it re-resolves which '
+                        'model the viewer draws at this placement.')
         self.p_template = QLabel('')
-        inf.addRow('Template', self.p_template)
+        self._field_row(inf, 'Template', self.p_template,
+                        'Readable template name resolved from Templates.CRT / Global.LVL by the w1 hash. '
+                        'Read-only; it is data from the game files, not stored in this record.')
         self.p_sent = QLineEdit()
         self.p_sent.editingFinished.connect(self._sent_edited)
-        inf.addRow('sent (ref / FFFFFFFF)', self.p_sent)
+        self._field_row(inf, 'sent (ref / FFFFFFFF)', self.p_sent,
+                        'Reference to another name slot (h1), or FFFFFFFF for none. Its exact game '
+                        'meaning is not fully decoded; the value is stored verbatim.')
         self.p_typ = QSpinBox()
         self.p_typ.setRange(0, 31)
         self.p_typ.valueChanged.connect(self._typ_edited)
-        inf.addRow('typ (flags 0-31)', self.p_typ)
-        inf.addRow('Fixed markers', QLabel('0xCCCC / 0xCCCC / 0x0000 (format constants)'))
+        self._field_row(inf, 'typ (flags 0-31)', self.p_typ,
+                        'Five-bit flags field in the record. Its exact meaning is not fully decoded; '
+                        'the value is preserved verbatim when saving.')
+        markers = QLabel('0xCCCC / 0xCCCC / 0x0000 (format constants)')
+        self._field_row(inf, 'Fixed markers', markers,
+                        'Two 0xCCCC markers and a trailing zero that the Objects.LP parser requires. '
+                        'Shown for reference; they cannot be changed.')
         lay.addWidget(ig)
 
         gb = QGroupBox('Transform')
+        gb.setToolTip('Where and how the placed model is drawn in the viewer and in the game files.')
         form = QFormLayout(gb)
         self.pos_spin = [self._spin(-1e6, 1e6, 0.05, 3) for _ in range(3)]      # drag the number to scrub
         self.rot_spin = [self._spin(-360, 360, 1.0, 2) for _ in range(3)]
         for lbl, sp in zip('XYZ', self.pos_spin):
-            form.addRow('Position ' + lbl, sp)
+            self._field_row(form, 'Position ' + lbl, sp,
+                            'Placement position along %s in level units (stored as 12.12 fixed point). '
+                            'The same world space as room models and collision.' % lbl)
             sp.valueChanged.connect(self._pos_edited)
         for lbl, sp in zip('XYZ', self.rot_spin):
-            form.addRow('Rotation ' + lbl + ' (deg)', sp)
+            self._field_row(form, 'Rotation ' + lbl + ' (deg)', sp,
+                            'Euler angle around %s in degrees, used to orient the placed model. '
+                            'Derived from the three raw 16-bit values below.' % lbl)
             sp.valueChanged.connect(self._rot_edited)
         self.p_brads = QLineEdit()
         self.p_brads.editingFinished.connect(self._brads_edited)
-        form.addRow('Raw (3 x s16, 4096/turn)', self.p_brads)
+        self._field_row(form, 'Raw (3 x s16, 4096/turn)', self.p_brads,
+                        'The three signed 16-bit values at record offsets 0x18/0x1A/0x1C, in 4096 '
+                        'steps per turn (enter as "x, y, z"). For AI records the middle one is the '
+                        'spawn facing.')
         lay.addWidget(gb)
 
         tg = QGroupBox('Trigger box (24 extra bytes, 12.12)')
+        tg.setToolTip('Only for flags-2 trigger records: six offsets that define the trigger volume.')
         tf = QFormLayout(tg)
         self.p_box = [self._spin(-2**31, 2**31 - 1, 1.0, 0) for _ in range(6)]
-        for lbl, sp in zip(('min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z'), self.p_box):
-            tf.addRow(lbl + ' (offset)', sp)
-            i = ('min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z').index(lbl)
+        names = ('min X', 'min Y', 'min Z', 'max X', 'max Y', 'max Z')
+        for i, (lbl, sp) in enumerate(zip(names, self.p_box)):
+            self._field_row(tf, lbl + ' (offset)', sp,
+                            '%s corner offset relative to the placement position, in 12.12 level '
+                            'units. These six values are the record\'s extra 24 bytes.' % lbl)
             sp.valueChanged.connect(lambda _, i=i: self._box_edited(i))
         self.p_box_world = QLabel('')
         self.p_box_world.setWordWrap(True)
-        tf.addRow('World min / max', self.p_box_world)
+        self._field_row(tf, 'World min / max', self.p_box_world,
+                        'Absolute trigger corners after adding the offsets to the placement position. '
+                        'Read-only; computed from the six offsets above.')
         self.trigger_group = tg
         lay.addWidget(tg)
 
         mg = QGroupBox('Model')
+        mg.setToolTip('Which .nsbmd is drawn for this placement and how that choice was made.')
         mf = QFormLayout(mg)
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
-        mf.addRow('Shows', self.model_combo)
+        self._field_row(mf, 'Shows', self.model_combo,
+                        'Model file stem drawn here (work/Models/<name>.nsbmd). Choose one from the '
+                        'list or type a stem to override the automatic choice.')
         self.p_how = QLabel('')
-        mf.addRow('Found by', self.p_how)
+        self._field_row(mf, 'Found by', self.p_how,
+                        'How the viewer chose this model: your override, template map, CHR name, spawn '
+                        'name or level-specific rule. Read-only.')
         b1 = QPushButton('Use for this name')
         b2 = QPushButton('Use for this template (all placements sharing it)')
         b3 = QPushButton('Clear my override')
+        b1.setToolTip('Save this model as an override for every placement with the same instance name.')
+        b2.setToolTip('Save this model as an override for every placement with the same w1 template hash.')
+        b3.setToolTip('Remove both name and template overrides that apply here and re-resolve the model.')
         b1.clicked.connect(lambda: self._assign_model('name'))
         b2.clicked.connect(lambda: self._assign_model('w1'))
         b3.clicked.connect(self._clear_override)
@@ -548,6 +617,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(mg)
 
         self.p_visible = QCheckBox('Visible in viewer')
+        self.p_visible.setToolTip('Viewer-only: hides this placement\'s model or marker without changing the level files.')
         self.p_visible.toggled.connect(self._visible_toggled)
         lay.addWidget(self.p_visible)
         lay.addStretch(1)

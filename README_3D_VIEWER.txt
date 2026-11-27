@@ -69,7 +69,9 @@ template, but the three `TankTop*` spawns in Crab Key are enemies and use the
 Properties panel
 ----------------
 Selecting a placement shows every field of its Objects.LP record and makes the
-editable ones writable:
+editable ones writable. Hover over a field name or its input box for an
+explanation of what it stores and what editing it does. Tooltips use a long
+timeout so they stay visible while you read them:
 
   * Instance name (CodeStrings.CHR), name index h1, and the w0 instance hash.
     Editing the name updates w0 = java31(name) and the CHR string; Save writes
