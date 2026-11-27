@@ -30,18 +30,24 @@ at every Fort Knox waypoint).
 
 Enemy models
 ------------
-All 711 AI spawns get a character model from the authoritative table in
-Templates.CRT: 95 AI template hashes at 0xB60+16*i and a parallel list of 95
-NUL-separated model names at 0x90B5, indexed by the same i.  The loader
-`viewer3d_model_map.load_ai_model_table()` reads it; the old instance-name
-patterns were unreliable and are now only a fallback.  Examples:
-  * Fort Knox: all 40 spawns are GFT1 (Goldfinger's guards). The CRT table would
-    assign 3 of them (Long Bow / Jackal / Mamba templates) to Oddjob, but the
-    `e_gfe_*` instance names mark them as guards, so those win.
-  * e_*_dnl_* in Hong Kong/Midas are mostly GFT1 or Oddjob, not dnl1.
-  * e_vtm_* in multiplayer maps are playable characters (Goldfinger, etc.).
+All 711 AI spawns get a character model.  Two sources are combined:
+  * Templates.CRT: 95 AI template hashes at 0xB60+16*i and a parallel list of
+    95 NUL-separated model names at 0x90B5, indexed by the same i.  The loader
+    `viewer3d_model_map.load_ai_model_table()` reads it.  This is exact for
+    multiplayer `e_vtm_*` spawns and the named character templates.
+  * The per-level spawn name in CodeStrings.CHR, which is authoritative for
+    story levels (see below).
 The class hash at +0x0C of the 44-byte AI record is behaviour, not model:
 0x76fd69ba = CROUCH, 0x04102685 = GUARD, 0x00267729 = ROAM.
+The full per-level mapping is in ../documentation/Object_Models_By_Level.md.
+
+For story levels the spawn's CHR name is authoritative, not the CRT string:
+`e_gfe_*`/`e_guards_*` are GFT1 guards, `e_*_dnl_*` are DNL1, `e_*_spc_*` are
+Spectre guards, `e_*_tt_*` are Triad thugs, plus explicit aliases such as
+`finalocto` -> octoguard and `TankTop*` -> tank.  This is why Fort Knox has
+zero Oddjob models: three spawns there carry Long Bow / Jackal / Mamba
+templates whose CRT string is OddJob, but their names mark them as guards.
+Multiplayer `e_vtm_*` names carry no role, so those use the CRT table.
 
 AI NEO AGENT in Global.LVL is a spawn-name list, not a template-name list -
 matching it positionally to the kind-11 hashes gives 0/95 hash matches.
@@ -53,8 +59,12 @@ overrides it. Fog near/far, sky background and lighting are still manual because
 game stores no per-level values for them in the extracted files.
 
 Placed props also use level-specific models when there is no global name: the
-Elevator template picks `elev_hk1` (Auric/Hong Kong), `cas_elev` (Midas Casino)
-or `ck_elev` (Crab Key).
+Elevator template picks `elev_hk1` (Fort Knox/Auric/Hong Kong), `cas_elev`
+(Midas Casino) or `ck_elev` (Crab Key).
+
+AI spawns never use the placed-prop table: the `TankTop` hash is also a prop
+template, but the three `TankTop*` spawns in Crab Key are enemies and use the
+`tank` character model (from the spawn-name alias), not the `tanktop` prop.
 
 If a model is missing or wrong, pick the correct one in the Properties panel;
 overrides are saved in viewer3d_data\_viewer3d_overrides.json (next to

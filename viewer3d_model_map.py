@@ -160,14 +160,19 @@ AI_W1_MODEL = {
     0xd2dd7722: 'xenia_onatopp', 0x2e3110f8: 'xenia_onatopp', 0xa12445c6: 'xenia_onatopp',
 }
 
-# The other ~80 AI templates are weapon/archetype variants ("P90 Example",
-# "Mamba Example", ...) whose resolved CRT records carry only an animation-set
-# hash (+0x10) and a weapon hash (+0x14) - no character-model hash.  Their
-# appearance is encoded in the spawn's instance name instead, with a very
-# regular scheme (verified across all 706 AI spawns):
+# Story-level AI spawns are named after the character/role the level designer
+# placed ("e_gfe_*" = Goldfinger's guards, "e_*_dnl_*" = Dr. No lackeys, ...).
+# The CRT string at 0x90B5 only describes the *template's* default character
+# (e.g. Long Bow Example -> OddJob); in a level the spawn name wins.  This is
+# confirmed in Fort Knox: all 40 spawns are e_gfe_* and the game shows no
+# OddJob there, even though three of them carry Oddjob-templated hashes.
+# Multiplayer "e_vtm_*" names carry no role, so they fall through to the CRT
+# table, which is exact for the playable-character templates.
+#
+# Ordered: specific aliases first, then the story role prefixes.
 AI_NAME_MODEL = [
     ('finalocto', 'octoguard'),
-    ('tanktop', 'tanktop'),
+    ('tanktop', 'tank'),
     ('oddjob', 'oddjob'),
     ('goldfinger', 'goldfinger'),
     ('e_r10_xenia', 'xenia_onatopp'),
@@ -176,9 +181,11 @@ AI_NAME_MODEL = [
     ('rocketman', 'foo_rocket'),
     ('cine_osprey', 'v_osprey'),
     ('e_r9_tt_informant', 'triad_informant'),
-    # Instance-name prefixes are NOT reliable model indicators: the CRT table
-    # above is authoritative.  Only keep patterns that are direct evidence.
-    ('e_gfe_', 'gft1'),             # fallback only, when the CRT table is absent
+    ('e_gfe_', 'gft1'),             # Fort Knox / Auric / Crab Key guards
+    ('e_guards_', 'gft1'),          # Crab Key guards
+    ('_dnl_', 'dnl1'),              # Dr. No lackeys (story levels)
+    ('_spc_', 'spectre_guard'),     # SPECTRE guards (Volcano Lair)
+    ('_tt_', 'triad_thug'),         # Triad thugs (Hong Kong)
 ]
 
 # Templates that place different models depending on the instance name.
@@ -251,38 +258,33 @@ LEVEL_MODEL = {
     '7_0_CrabKey': {0x2ea3c8ee: 'ck_elev'},
 }
 
-# Instance-name overrides that beat the AI template table: the e_gfe_* spawns
-# are Goldfinger's guards (GFT1), whatever weapon template they carry.
-AI_NAME_FIRST = (
-    ('e_gfe_', 'gft1'),
-)
-
 def builtin(w1, name, index, is_ai=False, ai_table=None, level=None):
     """Return (stem, how) or (None, None).
 
     `index` is the resolver's dict of available model stems -> path.
+
+    AI spawns use the instance name (CodeStrings.CHR) first and the CRT
+    template -> model table second.  The W1_MODEL table holds placed props
+    only; one AI hash (0xC1D5809E, TankTop) is also a prop template, so it must
+    never be consulted for an AI spawn.
     """
     if level and w1 in LEVEL_MODEL.get(level, {}):
         stem = LEVEL_MODEL[level][w1]
         return (stem, 'level') if stem in index else (None, None)
     if w1 in NO_MODEL_W1:
         return None, 'none'
-    if w1 in W1_MODEL:
-        stem = W1_MODEL[w1]
-        return (stem, 'builtin') if stem in index else (None, None)
     if is_ai:
         low = str(name).lower()
-        for pattern, stem in AI_NAME_FIRST:
+        for pattern, stem in AI_NAME_MODEL:
             if pattern in low and stem in index:
                 return stem, 'ai-name'
         stem = (ai_table or {}).get(w1) or AI_W1_MODEL.get(w1)
         if stem and stem in index:
             return stem, 'builtin'
-        low = str(name).lower()
-        for pattern, stem in AI_NAME_MODEL:
-            if pattern in low and stem in index:
-                return stem, 'ai-name'
         return None, None
+    if w1 in W1_MODEL:
+        stem = W1_MODEL[w1]
+        return (stem, 'builtin') if stem in index else (None, None)
     hint = NAME_HINTS.get(_key(name))
     if hint and hint in index:
         return hint, 'builtin'
