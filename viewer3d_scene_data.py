@@ -307,6 +307,8 @@ class Level:
         self.lp = None
         self.lp_path = None
         self.template_names = {}         # w1 -> readable template name
+        self.template_details = []       # [{w1, name, kind}] from Templates.CRT
+        self.lp_dirty = False            # records/paths added or removed
         self.paths = []                  # [(nodes Nx3, edges [(a,b)])]
         self.resolver = None
         self.bmin = np.array([-10.0] * 3)
@@ -377,8 +379,9 @@ class Level:
             try:
                 lv.lp = lpmod.parse(lp_p)
                 lv.lp_path = lp_p
-                lv.template_names = {d['w1']: d['name'] for d in lpmod.load_template_details(
-                    os.path.join(work, 'Templates.CRT'), os.path.join(work, 'Global.LVL'))}
+                lv.template_details = lpmod.load_template_details(
+                    os.path.join(work, 'Templates.CRT'), os.path.join(work, 'Global.LVL'))
+                lv.template_names = {d['w1']: d['name'] for d in lv.template_details}
                 lv.chr_path = chr_p if os.path.isfile(chr_p) else None
                 lv.chr = lpmod.load_chr(chr_p) if lv.chr_path else None
                 lv.resolver = ModelResolver(work, d)
@@ -454,8 +457,44 @@ class Level:
             f.write(data)
         for o in self.objects:
             o.dirty = False
+        self.lp_dirty = False
         log('saved %s (%d bytes)' % (self.lp_path, len(data)))
         return True
+
+    def rebuild_paths(self):
+        """Refresh the drawable path geometry after a path was added or removed."""
+        self.paths = []
+        for p in (self.lp.paths() if self.lp else []):
+            nodes = np.array([p.node_pos(i) for i in range(p.node_count)], np.float64)
+            self.paths.append((nodes.reshape(-1, 3), [(e[0], e[1]) for e in p.edges]))
+
+    def rebuild_objects(self):
+        """Rebuild the viewer's ObjectInst list after records/paths were added or removed.
+
+        Existing records are kept (with their visibility and dirty state); new
+        records start dirty.  All models are re-resolved from the current names.
+        """
+        old = {id(o.rec): o for o in self.objects}
+        recs = self.lp.records() if self.lp else []
+        if self.chr:
+            names = [self.chr.strings[r.h1] if 0 <= r.h1 < len(self.chr.strings)
+                     else 'h1_%d' % r.h1 for r in recs]
+        else:
+            names = ['h1_%d' % r.h1 for r in recs]
+        if self.resolver:
+            self.resolver.prepare([(r.w1, n, r.is_ai) for r, n in zip(recs, names)])
+        self.objects = []
+        for i, (r, n) in enumerate(zip(recs, names)):
+            o = ObjectInst(i, r, n)
+            prev = old.get(id(r))
+            if prev is not None:
+                o.visible, o.dirty = prev.visible, prev.dirty
+            else:
+                o.dirty = True
+            if self.resolver:
+                o.model, o.how = self.resolver.resolve(r.w1, n, r.is_ai)
+            self.objects.append(o)
+        return self.objects
 
     def save_chr(self, log=print):
         """Write CodeStrings.CHR after a name edit (same _backup convention)."""

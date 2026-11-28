@@ -287,6 +287,7 @@ class MainWindow(QMainWindow):
         self.work = None
         self.level_name = None
         self.model_cache = {}
+        self.path_sel = None                # selected path index in the Paths tab
         self.undo = []
         self._last_undo = (None, 0.0)
         self._updating = False
@@ -459,12 +460,40 @@ class MainWindow(QMainWindow):
         self.obj_filter.setPlaceholderText('filter objects (name, kind, model)')
         self.obj_filter.textChanged.connect(self._fill_objects)
         lay.addWidget(self.obj_filter)
+        ob = QHBoxLayout()
+        for text, slot, tip in (
+                ('Add object', self.add_object, 'Add a new placement to Objects.LP.'),
+                ('Duplicate', self.duplicate_object, 'Copy the selected placement with a new name.'),
+                ('Remove', self.remove_object, 'Delete the selected placement from Objects.LP.')):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            ob.addWidget(b)
+        lay.addLayout(ob)
         self.obj_tree = QTreeWidget()
         self.obj_tree.setHeaderLabels(['Name', 'Kind', 'Model'])
         self.obj_tree.itemSelectionChanged.connect(self._obj_list_selected)
         self.obj_tree.itemChanged.connect(self._obj_item_changed)
         lay.addWidget(self.obj_tree)
         tabs.addTab(ow, 'Objects')
+
+        pw = QWidget()
+        pl = QVBoxLayout(pw)
+        pl.setContentsMargins(2, 2, 2, 2)
+        pb = QHBoxLayout()
+        for text, slot, tip in (
+                ('Add path', self.add_path, 'Add an empty AI patrol path to Objects.LP.'),
+                ('Remove path', self.remove_path, 'Delete the selected path from Objects.LP.')):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            pb.addWidget(b)
+        pl.addLayout(pb)
+        self.path_tree = QTreeWidget()
+        self.path_tree.setHeaderLabels(['#', 'Hash', 'Nodes', 'Edges'])
+        self.path_tree.itemSelectionChanged.connect(self._path_list_selected)
+        pl.addWidget(self.path_tree)
+        tabs.addTab(pw, 'Paths')
         tabs.setCurrentIndex(1)                      # Objects list open by default
         dock.setWidget(tabs)
         dock.setMinimumWidth(300)
@@ -536,8 +565,13 @@ class MainWindow(QMainWindow):
         self.p_sent = QLineEdit()
         self.p_sent.editingFinished.connect(self._sent_edited)
         self._field_row(inf, 'sent (ref / FFFFFFFF)', self.p_sent,
-                        'Reference to another name slot (h1), or FFFFFFFF for none. Its exact game '
-                        'meaning is not fully decoded; the value is stored verbatim.')
+                        'Raw u32 reference: FFFFFFFF for none, an h1 slot reference, or the hash of '
+                        'a patrol path when "Points to path" is set below.')
+        self.p_path = QComboBox()
+        self.p_path.currentIndexChanged.connect(self._path_edited)
+        self._field_row(inf, 'Points to path', self.p_path,
+                        'Choose a patrol path: its hash is written to this record\'s sent field. '
+                        'AI spawns are expected to follow that path in the game. "None" writes FFFFFFFF.')
         self.p_typ = QSpinBox()
         self.p_typ.setRange(0, 31)
         self.p_typ.valueChanged.connect(self._typ_edited)
@@ -642,6 +676,7 @@ class MainWindow(QMainWindow):
         for s in (self.p_h1, self.p_typ):
             s.setEnabled(on)
         self.p_kind.setEnabled(on)
+        self.p_path.setEnabled(on)
         self.model_combo.setEnabled(on)
         self.p_visible.setEnabled(on)
 
@@ -731,7 +766,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ level loading
     def open_level(self, work, name):
-        if self.level_name and self.view.level and any(o.dirty for o in self.view.level.objects):
+        if self.level_name and self.view.level and (
+                self.view.level.lp_dirty or any(o.dirty for o in self.view.level.objects)):
             r = QMessageBox.question(self, 'Unsaved changes', 'Save the edited placements of %s first?' % self.level_name,
                                      QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
             if r == QMessageBox.Cancel:
@@ -776,6 +812,8 @@ class MainWindow(QMainWindow):
             self.view.set_level(lv)
             self._fill_files()
             self._fill_objects()
+            self._fill_paths()
+            self.path_sel = None
             self._on_selected(-1)
             self._update_title()
             msg = 'Loaded %s' % name
@@ -796,6 +834,8 @@ class MainWindow(QMainWindow):
         if self.work and self.level_name:
             for o in (self.view.level.objects if self.view.level else []):
                 o.dirty = False
+            if self.view.level:
+                self.view.level.lp_dirty = False
             self.model_cache.clear()
             self.open_level(self.work, self.level_name)
 
@@ -805,7 +845,8 @@ class MainWindow(QMainWindow):
             self.menu_levels.addAction(self._act(n, lambda _=False, n=n: self.open_level(self.work, n)))
 
     def _update_title(self):
-        dirty = self.view.level and any(o.dirty for o in self.view.level.objects)
+        lv = self.view.level
+        dirty = lv and (lv.lp_dirty or any(o.dirty for o in lv.objects))
         self.setWindowTitle('%s%s - GoldenEye: Rogue Agent 3D viewer' % (self.level_name or '', ' *' if dirty else ''))
 
     # ------------------------------------------------------------------ left panels
@@ -874,6 +915,41 @@ class MainWindow(QMainWindow):
         if its:
             self.view.select(its[0].data(0, Qt.UserRole))
 
+    def _fill_paths(self):
+        t = self.path_tree
+        t.blockSignals(True)
+        t.clear()
+        lv = self.view.level
+        if lv and lv.lp:
+            for i, p in enumerate(lv.lp.paths()):
+                it = QTreeWidgetItem(['%d' % i, '%08X' % p.hash,
+                                      '%d' % p.node_count, '%d' % p.edge_count])
+                it.setData(0, Qt.UserRole, i)
+                t.addTopLevelItem(it)
+        t.resizeColumnToContents(0)
+        t.blockSignals(False)
+
+    def _path_list_selected(self):
+        if self._updating:
+            return
+        its = self.path_tree.selectedItems()
+        self.path_sel = its[0].data(0, Qt.UserRole) if its else None
+
+    def _path_combo_items(self):
+        """Rebuild the Properties path list, keeping the current sent value."""
+        lv = self.view.level
+        cur = self.view.sel_obj()
+        self.p_path.blockSignals(True)
+        self.p_path.clear()
+        self.p_path.addItem('None (FFFFFFFF)', 0xffffffff)
+        for i, p in enumerate(lv.lp.paths() if lv and lv.lp else []):
+            self.p_path.addItem('#%d  %08X  (%d nodes, %d edges)' % (
+                i, p.hash, p.node_count, p.edge_count), p.hash)
+        val = cur.rec.sent if cur else 0xffffffff
+        idx = self.p_path.findData(val)
+        self.p_path.setCurrentIndex(idx if idx >= 0 else 0)
+        self.p_path.blockSignals(False)
+
     # ------------------------------------------------------------------ properties
     def _on_selected(self, idx):
         self._updating = True
@@ -900,6 +976,7 @@ class MainWindow(QMainWindow):
             self.p_w1.setText('%08X' % r.w1)
             self.p_template.setText(lv.template_names.get(r.w1, '-'))
             self.p_sent.setText('%08X' % r.sent)
+            self._path_combo_items()
             self.p_typ.setValue(r.typ)
             self._refresh_transform(o)
             self.trigger_group.setVisible(r.is_trigger)
@@ -1040,6 +1117,20 @@ class MainWindow(QMainWindow):
             return
         o.rec.sent = v
         self._refresh_after_edit(o)
+
+    def _path_edited(self):
+        if self._updating:
+            return
+        o = self.view.sel_obj()
+        data = self.p_path.currentData()
+        if not o or data is None:
+            return
+        o.rec.sent = int(data) & 0xffffffff
+        self.p_sent.setText('%08X' % o.rec.sent)
+        o.dirty = True
+        self.view.object_changed(o.idx)
+        self._update_title()
+        self.sb.showMessage('sent = %08X - this object will follow that path in the game' % o.rec.sent, 5000)
 
     def _typ_edited(self):
         if self._updating:
@@ -1204,6 +1295,186 @@ class MainWindow(QMainWindow):
         self._fill_objects()
         self._on_selected(o.idx)
 
+    # ------------------------------------------------------------------ add / remove
+    def _unused_h1(self):
+        lv = self.view.level
+        if not lv or not lv.chr or not lv.lp:
+            return []
+        used = lv.lp.h1_used()
+        return [(i, lv.chr.strings[i]) for i in range(lv.chr.count) if i not in used]
+
+    def add_object(self):
+        self._object_dialog(None)
+
+    def duplicate_object(self):
+        o = self.view.sel_obj()
+        if not o:
+            QMessageBox.information(self, 'Duplicate', 'Select a placement first.')
+            return
+        self._object_dialog(o)
+
+    def _object_dialog(self, src):
+        lv = self.view.level
+        if not lv or not lv.lp:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle('Duplicate placement' if src else 'Add placement')
+        form = QFormLayout(dlg)
+        kind = QComboBox()
+        kind.addItems(['Object', 'AI enemy', 'Trigger box'])
+        kind.setCurrentIndex({0: 0, 8: 1, 2: 2}.get(src.rec.flags, 0) if src else 0)
+        form.addRow('Kind', kind)
+        tpl = QComboBox()
+        form.addRow('Template', tpl)
+
+        def refill_tpl():
+            tpl.blockSignals(True)
+            tpl.clear()
+            tpl.addItem('(no template)', 0)
+            k = kind.currentIndex()
+            if k != 2:                         # triggers have no template
+                want = 'ai' if k == 1 else 'object'
+                for d in lv.template_details:
+                    if d['kind'] == want:
+                        tpl.addItem('%s  [%08X]' % (d['name'], d['w1']), d['w1'])
+            if src:
+                i = tpl.findData(src.rec.w1)
+                if i >= 0:
+                    tpl.setCurrentIndex(i)
+                else:
+                    tpl.addItem('current: %08X' % src.rec.w1, src.rec.w1)
+                    tpl.setCurrentIndex(tpl.count() - 1)
+            tpl.blockSignals(False)
+        kind.currentIndexChanged.connect(refill_tpl)
+        refill_tpl()
+
+        name = QLineEdit((src.name + '_copy') if src else 'new_object')
+        form.addRow('Instance name', name)
+        unused = self._unused_h1()
+        reuse = QCheckBox('Reuse an unused name slot')
+        slot = QComboBox()
+        slot.addItems(['%d: %s' % (h1, nm) for h1, nm in unused])
+        form.addRow(reuse, slot)
+        form.addRow(QLabel('Otherwise a new name is appended to CodeStrings.CHR.'))
+        pos = [self._spin(-1e6, 1e6, 0.05, 3) for _ in range(3)]
+        try:
+            centre = self.view.cam.pivot()
+        except Exception:
+            centre = (0.0, 0.0, 0.0)
+        start = src.pos if src else centre
+        for s, v in zip(pos, start):
+            s.setValue(float(v))
+        for lbl, s in zip('XYZ', pos):
+            form.addRow('Position ' + lbl, s)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        form.addRow(bb)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        flags = (0, 8, 2)[kind.currentIndex()]
+        size = lpmod.TRIGGER_SIZE if flags == lpmod.REC_TRIGGER else lpmod.RECORD_SIZE
+        w1 = 0 if flags == lpmod.REC_TRIGGER else (tpl.currentData() or 0)
+        nm = name.text().strip().replace(' ', '_')
+        if reuse.isChecked() and unused:
+            h1 = unused[slot.currentIndex()][0]
+        else:
+            if not nm:
+                QMessageBox.warning(self, 'Add placement', 'Enter an instance name.')
+                return
+            if lv.chr is None:
+                QMessageBox.warning(self, 'Add placement', 'No CodeStrings.CHR - cannot add a name.')
+                return
+            h1 = lv.chr.append([nm])[0]
+            lv.chr_dirty = True
+        if reuse.isChecked() and unused:
+            nm = unused[slot.currentIndex()][1]
+        w0 = lpmod.java31(nm)
+        extra = (b'\x00' * 24)
+        tail = b'\x00' * 6
+        sent, typ = 0xffffffff, 0
+        if src:
+            extra = src.rec.extra6 or extra
+            tail, sent, typ = src.rec.tail6, src.rec.sent, src.rec.typ
+        rec = lpmod.LPRecord(flags, size, w0, w1, [0, 0, 0], tail, h1, sent, typ,
+                             extra if flags == lpmod.REC_TRIGGER else None)
+        rec.set_position(*[s.value() for s in pos])
+        if flags == lpmod.REC_TRIGGER and not src:
+            rec.set_box(1.0, 1.0, 3.0)
+        lv.lp.add_record(rec)
+        lv.lp_dirty = True
+        lv.rebuild_objects()
+        idx = next((i for i, o in enumerate(lv.objects) if o.rec is rec), -1)
+        self.view.object_changed()
+        self._fill_objects()
+        self.view.select(idx)
+        self._on_selected(idx)
+        self._update_title()
+
+    def remove_object(self):
+        o = self.view.sel_obj()
+        lv = self.view.level
+        if not o or not lv or not lv.lp:
+            QMessageBox.information(self, 'Remove', 'Select a placement first.')
+            return
+        if QMessageBox.question(self, 'Remove placement',
+                                'Delete %s (h1 %d) from Objects.LP?' % (o.name, o.rec.h1)) != QMessageBox.Yes:
+            return
+        lv.lp.remove_record(o.rec)
+        lv.lp_dirty = True
+        lv.rebuild_objects()
+        self.view.object_changed()
+        self._fill_objects()
+        self._fill_paths()
+        self.view.select(-1)
+        self._on_selected(-1)
+        self._update_title()
+
+    def add_path(self):
+        lv = self.view.level
+        if not lv or not lv.lp:
+            return
+        hashes = [p.hash for p in lv.lp.paths()]
+        new_hash = (max(hashes) + 1) if hashes else 0x1000
+        lv.lp.add_path(lpmod.LPPath(new_hash, b'\x00' * 36, [], []))
+        lv.lp_dirty = True
+        lv.rebuild_paths()
+        self._fill_paths()
+        self.path_sel = len(lv.lp.paths()) - 1
+        self.path_tree.setCurrentItem(self.path_tree.topLevelItem(self.path_sel))
+        self.view.markers_dirty = True
+        self.view.update()
+        self._update_title()
+        self.sb.showMessage('Added empty path with hash %08X' % new_hash, 5000)
+
+    def remove_path(self):
+        lv = self.view.level
+        if not lv or not lv.lp or self.path_sel is None:
+            QMessageBox.information(self, 'Remove path', 'Select a path in the Paths tab first.')
+            return
+        paths = lv.lp.paths()
+        if not (0 <= self.path_sel < len(paths)):
+            return
+        path = paths[self.path_sel]
+        if QMessageBox.question(self, 'Remove path',
+                                'Delete path %d (hash %08X, %d nodes, %d edges)?' % (
+                                    self.path_sel, path.hash, path.node_count, path.edge_count)) != QMessageBox.Yes:
+            return
+        lv.lp.remove_path(path)
+        for o in lv.objects:                       # clear references to the deleted path
+            if o.rec.sent == path.hash:
+                o.rec.sent = 0xffffffff
+                o.dirty = True
+        lv.lp_dirty = True
+        lv.rebuild_paths()
+        self.path_sel = None
+        self._fill_paths()
+        self._path_combo_items()
+        self.view.markers_dirty = True
+        self.view.update()
+        self._update_title()
+
     # ------------------------------------------------------------------ misc
     def save(self):
         lv = self.view.level
@@ -1228,7 +1499,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         lv = self.view.level
-        if lv and any(o.dirty for o in lv.objects):
+        if lv and (lv.lp_dirty or any(o.dirty for o in lv.objects)):
             r = QMessageBox.question(self, 'Unsaved changes', 'Save the edited placements first?',
                                      QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
             if r == QMessageBox.Cancel:

@@ -90,6 +90,22 @@ The `0xCCCC` markers and the trailing zero are format constants: they are shown
 but cannot be edited because the Objects.LP parser rejects any other value.
 The record size is derived from the kind for the same reason.
 
+Adding and removing level data
+------------------------------
+The left dock's Objects tab has Add object / Duplicate / Remove buttons:
+  * Add asks for kind (object, trigger, AI), template, instance name and position.
+    A new name is appended to CodeStrings.CHR, or an unused name slot can be reused.
+  * Duplicate copies the selected record with a new name slot.
+  * Remove deletes the selected record (with a confirmation).
+The Paths tab has Add path / Remove path.  A new path is empty with hash
+max(existing)+1 (or 0x1000); removing one also clears that path hash from any
+record's `sent` field.  Add/remove edits are marked unsaved until Save.
+
+To make an object follow a patrol path, select it and choose the path in the
+Properties field "Points to path".  This writes the path's hash into the
+record's `sent` field (FFFFFFFF when "None" is selected).  Save writes Objects.LP
+and, if names changed, CodeStrings.CHR.
+
 If a model is missing or wrong, pick the correct one in the Properties panel;
 overrides are saved in viewer3d_data\_viewer3d_overrides.json (next to
 pandora_editor.py) and always win.
