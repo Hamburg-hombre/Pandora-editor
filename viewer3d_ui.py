@@ -661,8 +661,13 @@ class MainWindow(QMainWindow):
         self._field_row(hf, 'Capacity', self.p_hint_cap,
                         'Maximum characters this hint slot can hold. Longer text would move every '
                         'other string in Templates.CRT and break unrelated game text.')
+        self.p_hint_warn = QLabel('')
+        self.p_hint_warn.setWordWrap(True)
+        self.p_hint_warn.setStyleSheet('color:#a00')
+        hf.addRow(self.p_hint_warn)
         self.p_hint = QPlainTextEdit()
         self.p_hint.setMaximumHeight(110)
+        self.p_hint.textChanged.connect(self._hint_warn)
         self.p_hint.setToolTip('Edit the displayed message, then press Apply hint text. Shorter text is '
                                'padded with spaces; Templates.CRT is written immediately.')
         hf.addRow('Text', self.p_hint)
@@ -1026,6 +1031,7 @@ class MainWindow(QMainWindow):
                     extra = '; text at %06X' % off if off is not None else ''
                     self.p_hint_cap.setText('%d characters in slot (%d in use)%s' % (
                         ht.hint_capacity(crt, num), len(self.p_hint.toPlainText()), extra))
+                    self._hint_warn()
                 except OSError:
                     self.p_hint.setPlainText('')
                     self.p_hint_cap.setText('')
@@ -1342,6 +1348,14 @@ class MainWindow(QMainWindow):
         m = re.match(r'STR_HINT(\d+)$', o.name, re.I)
         return int(m.group(1)) if m else None
 
+    def _hint_warn(self):
+        words = ht.too_long_words(self.p_hint.toPlainText()) if hasattr(self, 'p_hint') else []
+        if words:
+            self.p_hint_warn.setText('Warning: %d word(s) may be wider than one game line '
+                                     '(e.g. %r) and could crash the game.' % (len(words), words[0][0]))
+        else:
+            self.p_hint_warn.setText('')
+
     def _apply_hint(self):
         o = self.view.sel_obj()
         lv = self.view.level
@@ -1350,6 +1364,18 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, 'Hint text', 'Select a Help Hint Panel (STR_HINT*) first.')
             return
         text = self.p_hint.toPlainText()
+        long_words = ht.too_long_words(text)
+        if long_words:
+            shown = ', '.join('%r (~%s wide)' % (w, width) for w, width in long_words[:4])
+            if len(long_words) > 4:
+                shown += ', ...'
+            r = QMessageBox.warning(
+                self, 'Hint text too long',
+                'These words have no spaces and may be wider than one line in the game, '
+                'which can crash it:\n%s\n\nApply anyway?' % shown,
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if r != QMessageBox.Yes:
+                return
         try:
             data, appended = ht.write_hint(open(lv.crt_path, 'rb').read(), num, text)
             lv.save_crt(data, lambda m: self.sb.showMessage(m, 8000))

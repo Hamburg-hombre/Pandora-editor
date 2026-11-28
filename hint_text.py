@@ -19,6 +19,43 @@ HINT_PTR_STRIDE = 8
 HINT_COUNT = 19
 
 
+# The DS text renderer wraps at a fixed pixel width.  30 x 'j' or 9 x 'w'
+# was reported to crash the game, so those widths define the limit (in 'j'
+# units).  A word without spaces cannot be wrapped, hence the warning.
+LINE_WIDTH = 28.0
+_CHAR_WIDTH = {}
+
+
+def _char_width(c):
+    if c not in _CHAR_WIDTH:
+        if c in 'jl.,;:\'"!|':
+            w = 1.0
+        elif c in 'wWM':
+            w = 3.4
+        elif c in 'mfOQ@':
+            w = 2.8
+        elif c in 'abcdefghknopqrstuvxyz':
+            w = 2.0
+        elif c in 'iItfr()[]-':
+            w = 1.4
+        elif c.isupper() or c.isdigit():
+            w = 2.3
+        else:
+            w = 2.0
+        _CHAR_WIDTH[c] = w
+    return _CHAR_WIDTH[c]
+
+
+def too_long_words(text):
+    """Return whitespace-free words estimated to exceed one rendered line."""
+    out = []
+    for word in str(text).split():
+        width = sum(_char_width(c) for c in word)
+        if width > LINE_WIDTH:
+            out.append((word, round(width, 1)))
+    return out
+
+
 def _entry(number):
     if not (1 <= number <= HINT_COUNT):
         return None

@@ -116,7 +116,10 @@ keeps a pristine copy in `<work>/_backup`).  Text that fits is written in place
 and padded with spaces.  If it is longer, the original text is left untouched,
 the new message is appended at EOF, and the hint's pointer entry in the CRT
 table at 0x521C (19 entries x 8 bytes, offsets relative to 0x8C74) is redirected
-to it — so the game shows the full text too.  Repack the ROM to test the change.
+to it — so the game shows the full text too.  A live warning appears (and a
+confirmation is required on Apply) when a word without spaces is estimated to be
+wider than one game line — e.g. 30 'j's or 9 'w's, which were reported to crash
+the game.  Repack the ROM to test the change.
 
 When you add a new Help Hint Panel with the Objects tab's Add button, it is
 automatically named `STR_HINT<n>` using the next free number (1-19), so its text
