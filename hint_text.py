@@ -1,41 +1,53 @@
 """Help Hint Panel text stored in Templates.CRT.
 
 Fort Knox's STR_HINT1..11 placements are Help Hint Panels (w1 0x3973BB0B).
-The text they display is one of the NUL-terminated strings in a block that
-starts with "YOUR PERSONAL SIDEARM..." in Templates.CRT.  No pointer table
-addresses the strings directly; they are found by walking the block.
+Each hint number selects an entry in an 8-byte pointer table at 0x521C:
 
-Editing is deliberately done **in place**: the new text is padded with spaces
-to exactly the original byte length.  Templates.CRT has several offset tables
-that index into this text by character position; changing the block length
-would invalidate them and corrupt unrelated level/menu text.
+    u32 textOffset = value - 0x8C74     (start of the NUL-terminated text)
+    u32 nextOffset                      (start of the following string)
+
+When the new text fits, it is overwritten in the slot it currently points to.
+When it is longer, the original text is left untouched, the new text is
+appended at EOF, and the pointer entry is redirected to it.  The game then
+shows the full message.
 """
-import re
+import struct
 
-HINT_TEXT_OFF = 0x9585             # first hint string ("YOUR PERSONAL SIDEARM...")
-HINT_MARKER = b'J VT Bot\x00'      # immediately precedes the hint block
+HINT_PTR_TABLE = 0x521C
+HINT_PTR_BASE = 0x8C74
+HINT_PTR_STRIDE = 8
 HINT_COUNT = 19
 
 
+def _entry(number):
+    if not (1 <= number <= HINT_COUNT):
+        return None
+    return HINT_PTR_TABLE + HINT_PTR_STRIDE * (number - 1)
+
+
+def hint_offset(crt, number):
+    ent = _entry(number)
+    if ent is None or ent + 4 > len(crt):
+        return None
+    off = HINT_PTR_BASE + struct.unpack_from('<I', crt, ent)[0]
+    return off if 0 <= off < len(crt) else None
+
+
 def hint_strings(crt):
-    """Return [(file offset, text)] for the hint block, in display order."""
-    m = crt.find(HINT_MARKER)
-    if m < 0:
-        return []
-    start = m + len(HINT_MARKER)
+    """Return [(file offset, text)] for the 19 hints, via the pointer table."""
     out = []
-    off = start
-    while len(out) < HINT_COUNT:
-        end = crt.find(b'\x00', off)
-        if end < 0 or end - off > 2000:
+    for n in range(1, HINT_COUNT + 1):
+        off = hint_offset(crt, n)
+        if off is None:
             break
-        if end > off:                       # skip the empty separator strings
-            out.append((off, crt[off:end].decode('latin-1').rstrip()))
-        off = end + 1
+        end = crt.find(b'\x00', off)
+        if end < 0 or end - off > 4000:
+            break
+        out.append((off, crt[off:end].decode('latin-1').rstrip()))
     return out
 
 
-def read_hint(crt, number):
+def read_hint(crt, number, overrides=None):
     items = hint_strings(crt)
     if 1 <= number <= len(items):
         return items[number - 1][1]
@@ -43,30 +55,35 @@ def read_hint(crt, number):
 
 
 def hint_capacity(crt, number):
-    """Maximum number of characters that can be written to hint `number`."""
-    items = hint_strings(crt)
-    if not (1 <= number <= len(items)):
+    """Maximum characters writable without moving the string block."""
+    off = hint_offset(crt, number)
+    if off is None:
         return 0
-    off = items[number - 1][0]
     end = crt.find(b'\x00', off)
     return end - off
 
 
 def write_hint(crt, number, text):
-    """Replace hint `number` (1-based) in place; pad with spaces to fit."""
-    items = hint_strings(crt)
-    if not (1 <= number <= len(items)):
+    """Write hint `number`; return (new_crt_bytes, appended_offset_or_None).
+
+    Short text is overwritten in place.  Long text is appended at EOF and the
+    hint's pointer entry is redirected to it.
+    """
+    ent = _entry(number)
+    off = hint_offset(crt, number)
+    if ent is None or off is None:
         raise ValueError('no hint %d in Templates.CRT' % number)
-    off = items[number - 1][0]
-    end = crt.find(b'\x00', off)
-    capacity = end - off
     blob = str(text).encode('latin-1')
     if b'\x00' in blob:
         raise ValueError('hint text cannot contain NUL bytes')
-    if len(blob) > capacity:
-        raise ValueError('hint text is %d characters; this slot holds at most %d'
-                         % (len(blob), capacity))
-    blob += b' ' * (capacity - len(blob))
     data = bytearray(crt)
-    data[off:end] = blob
-    return bytes(data)
+    end = crt.find(b'\x00', off)
+    appended = None
+    if len(blob) <= end - off:
+        data[off:end] = blob + b' ' * (end - off - len(blob))
+    else:
+        appended = len(data)
+        data += blob + b'\x00'
+        rel = appended - HINT_PTR_BASE
+        struct.pack_into('<II', data, ent, rel, rel + len(blob) + 1)
+    return bytes(data), appended

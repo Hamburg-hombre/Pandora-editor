@@ -1021,9 +1021,11 @@ class MainWindow(QMainWindow):
                 self.p_hint_index.setText(str(num))
                 try:
                     crt = open(lv.crt_path, 'rb').read()
+                    off = ht.hint_offset(crt, num)
                     self.p_hint.setPlainText(ht.read_hint(crt, num))
-                    self.p_hint_cap.setText('%d characters max (%d in use)' % (
-                        ht.hint_capacity(crt, num), len(self.p_hint.toPlainText())))
+                    extra = '; text at %06X' % off if off is not None else ''
+                    self.p_hint_cap.setText('%d characters in slot (%d in use)%s' % (
+                        ht.hint_capacity(crt, num), len(self.p_hint.toPlainText()), extra))
                 except OSError:
                     self.p_hint.setPlainText('')
                     self.p_hint_cap.setText('')
@@ -1349,12 +1351,17 @@ class MainWindow(QMainWindow):
             return
         text = self.p_hint.toPlainText()
         try:
-            data = ht.write_hint(open(lv.crt_path, 'rb').read(), num, text)
+            data, appended = ht.write_hint(open(lv.crt_path, 'rb').read(), num, text)
             lv.save_crt(data, lambda m: self.sb.showMessage(m, 8000))
         except Exception as e:
             QMessageBox.warning(self, 'Hint text', 'Could not write hint %d: %s' % (num, e))
             return
-        self.sb.showMessage('Hint %d saved to Templates.CRT (repack the ROM to test it)' % num, 8000)
+        if appended is None:
+            msg = 'Hint %d saved in its original slot' % num
+        else:
+            msg = ('Hint %d: full text appended at %06X and the CRT pointer redirected to it '
+                   '(original text left untouched)' % (num, appended))
+        self.sb.showMessage(msg + ' - repack the ROM to test it', 10000)
 
     # ------------------------------------------------------------------ add / remove
     def _unused_h1(self):

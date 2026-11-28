@@ -112,12 +112,11 @@ Select a Help Hint Panel (a `STR_HINT*` placement, e.g. in Fort Knox) and the
 Properties panel shows a "Hint panel text" group.  The message is not stored in
 the level: it is the Nth text in the hint block of `Templates.CRT`.  Edit it and
 press "Apply hint text" to write Templates.CRT immediately (the first write
-keeps a pristine copy in `<work>/_backup`).  The message is written **in place**
-and padded with spaces to the slot's original byte length; the panel shows the
-maximum length.  Templates.CRT contains offset tables that index the text by
-character position, so changing a hint's length would shift and corrupt other
-level/menu text — longer messages are rejected instead.  Repack the ROM to
-test the change in the game.
+keeps a pristine copy in `<work>/_backup`).  Text that fits is written in place
+and padded with spaces.  If it is longer, the original text is left untouched,
+the new message is appended at EOF, and the hint's pointer entry in the CRT
+table at 0x521C (19 entries x 8 bytes, offsets relative to 0x8C74) is redirected
+to it — so the game shows the full text too.  Repack the ROM to test the change.
 
 When you add a new Help Hint Panel with the Objects tab's Add button, it is
 automatically named `STR_HINT<n>` using the next free number (1-19), so its text
