@@ -1,6 +1,6 @@
 """Main window: Mario Kart Toolbox 1680 RC1 style layout (menu strip, tool strips, left tab control,
 central 3D view, right property panel, status strip) with Pandora's colours and button look."""
-import os, json, math, struct, tempfile
+import os, json, math, re, struct, tempfile
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, QRectF, QPointF, QSize, QEvent, QObject
 from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPen, QFont, QKeySequence, QBrush
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QButtonGroup, QMainWindow, QWidget, QDockWidget, 
 from viewer3d_gl import GLView, marker_kind, KIND_COLORS
 import viewer3d_scene_data as sd
 import objects_lp as lpmod
+import hint_text as ht
 import viewer3d_paths as vpaths
 import nslbc_fog as nf
 
@@ -650,6 +651,28 @@ class MainWindow(QMainWindow):
             mf.addRow(b)
         lay.addWidget(mg)
 
+        hg = QGroupBox('Hint panel text (Templates.CRT)')
+        hg.setToolTip('The message shown when the player touches this Help Hint Panel.')
+        hf = QFormLayout(hg)
+        self.p_hint_index = QLabel('')
+        self._field_row(hf, 'Hint number', self.p_hint_index,
+                        'The STR_HINT number in this level; selects the Nth text in the CRT hint block.')
+        self.p_hint_cap = QLabel('')
+        self._field_row(hf, 'Capacity', self.p_hint_cap,
+                        'Maximum characters this hint slot can hold. Longer text would move every '
+                        'other string in Templates.CRT and break unrelated game text.')
+        self.p_hint = QPlainTextEdit()
+        self.p_hint.setMaximumHeight(110)
+        self.p_hint.setToolTip('Edit the displayed message, then press Apply hint text. Shorter text is '
+                               'padded with spaces; Templates.CRT is written immediately.')
+        hf.addRow('Text', self.p_hint)
+        self.p_hint_apply = QPushButton('Apply hint text')
+        self.p_hint_apply.setToolTip('Write the edited message to Templates.CRT (with a backup on first write).')
+        self.p_hint_apply.clicked.connect(self._apply_hint)
+        hf.addRow(self.p_hint_apply)
+        self.hint_group = hg
+        lay.addWidget(hg)
+
         self.p_visible = QCheckBox('Visible in viewer')
         self.p_visible.setToolTip('Viewer-only: hides this placement\'s model or marker without changing the level files.')
         self.p_visible.toggled.connect(self._visible_toggled)
@@ -677,6 +700,8 @@ class MainWindow(QMainWindow):
             s.setEnabled(on)
         self.p_kind.setEnabled(on)
         self.p_path.setEnabled(on)
+        self.p_hint.setReadOnly(not on)
+        self.p_hint_apply.setEnabled(on)
         self.model_combo.setEnabled(on)
         self.p_visible.setEnabled(on)
 
@@ -962,6 +987,7 @@ class MainWindow(QMainWindow):
                 self.p_info.setText('')
                 self.p_how.setText('')
                 self.trigger_group.setVisible(False)
+                self.hint_group.setVisible(False)
                 self.obj_tree.clearSelection()
                 return
             self.p_name.setText('<b>%s</b>' % o.name)
@@ -989,6 +1015,18 @@ class MainWindow(QMainWindow):
                     ', '.join('%.2f' % v for v in lo), ', '.join('%.2f' % v for v in hi)))
             else:
                 self.p_box_world.setText('not a trigger record')
+            num = self._hint_number(o)
+            self.hint_group.setVisible(num is not None)
+            if num is not None and lv.crt_path:
+                self.p_hint_index.setText(str(num))
+                try:
+                    crt = open(lv.crt_path, 'rb').read()
+                    self.p_hint.setPlainText(ht.read_hint(crt, num))
+                    self.p_hint_cap.setText('%d characters max (%d in use)' % (
+                        ht.hint_capacity(crt, num), len(self.p_hint.toPlainText())))
+                except OSError:
+                    self.p_hint.setPlainText('')
+                    self.p_hint_cap.setText('')
             self.p_visible.setChecked(o.visible)
             stems = sorted(lv.resolver.index.keys()) if lv.resolver else []
             self.model_combo.clear()
@@ -1295,6 +1333,29 @@ class MainWindow(QMainWindow):
         self._fill_objects()
         self._on_selected(o.idx)
 
+    @staticmethod
+    def _hint_number(o):
+        if not o:
+            return None
+        m = re.match(r'STR_HINT(\d+)$', o.name, re.I)
+        return int(m.group(1)) if m else None
+
+    def _apply_hint(self):
+        o = self.view.sel_obj()
+        lv = self.view.level
+        num = self._hint_number(o)
+        if not o or num is None or not lv or not lv.crt_path:
+            QMessageBox.information(self, 'Hint text', 'Select a Help Hint Panel (STR_HINT*) first.')
+            return
+        text = self.p_hint.toPlainText()
+        try:
+            data = ht.write_hint(open(lv.crt_path, 'rb').read(), num, text)
+            lv.save_crt(data, lambda m: self.sb.showMessage(m, 8000))
+        except Exception as e:
+            QMessageBox.warning(self, 'Hint text', 'Could not write hint %d: %s' % (num, e))
+            return
+        self.sb.showMessage('Hint %d saved to Templates.CRT (repack the ROM to test it)' % num, 8000)
+
     # ------------------------------------------------------------------ add / remove
     def _unused_h1(self):
         lv = self.view.level
@@ -1377,6 +1438,20 @@ class MainWindow(QMainWindow):
         size = lpmod.TRIGGER_SIZE if flags == lpmod.REC_TRIGGER else lpmod.RECORD_SIZE
         w1 = 0 if flags == lpmod.REC_TRIGGER else (tpl.currentData() or 0)
         nm = name.text().strip().replace(' ', '_')
+        if w1 == 0x3973BB0B:                    # Help Hint Panel: name encodes the text number
+            used = set()
+            for r in lv.lp.records():
+                hname = lv.chr.strings[r.h1] if lv.chr and 0 <= r.h1 < len(lv.chr.strings) else ''
+                m = re.match(r'STR_HINT(\d+)$', hname, re.I)
+                if m:
+                    used.add(int(m.group(1)))
+            n = 1
+            while n <= 19 and n in used:
+                n += 1
+            if n > 19:
+                QMessageBox.warning(self, 'Add placement', 'All 19 hint text slots are in use.')
+                return
+            nm = 'STR_HINT%d' % n
         if reuse.isChecked() and unused:
             h1 = unused[slot.currentIndex()][0]
         else:
@@ -1389,7 +1464,11 @@ class MainWindow(QMainWindow):
             h1 = lv.chr.append([nm])[0]
             lv.chr_dirty = True
         if reuse.isChecked() and unused:
-            nm = unused[slot.currentIndex()][1]
+            if w1 == 0x3973BB0B:
+                lv.chr.strings[h1] = nm         # write the hint name into the reused slot
+                lv.chr_dirty = True
+            else:
+                nm = unused[slot.currentIndex()][1]
         w0 = lpmod.java31(nm)
         extra = (b'\x00' * 24)
         tail = b'\x00' * 6

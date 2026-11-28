@@ -304,6 +304,8 @@ class Level:
         self.chr = None
         self.chr_path = None
         self.chr_dirty = False
+        self.crt_path = None
+        self.crt_dirty = False
         self.lp = None
         self.lp_path = None
         self.template_names = {}         # w1 -> readable template name
@@ -379,8 +381,10 @@ class Level:
             try:
                 lv.lp = lpmod.parse(lp_p)
                 lv.lp_path = lp_p
+                crt_p = os.path.join(work, 'Templates.CRT')
+                lv.crt_path = crt_p if os.path.isfile(crt_p) else None
                 lv.template_details = lpmod.load_template_details(
-                    os.path.join(work, 'Templates.CRT'), os.path.join(work, 'Global.LVL'))
+                    crt_p, os.path.join(work, 'Global.LVL'))
                 lv.template_names = {d['w1']: d['name'] for d in lv.template_details}
                 lv.chr_path = chr_p if os.path.isfile(chr_p) else None
                 lv.chr = lpmod.load_chr(chr_p) if lv.chr_path else None
@@ -510,6 +514,21 @@ class Level:
             f.write(data)
         self.chr_dirty = False
         log('saved %s (%d bytes)' % (self.chr_path, len(data)))
+        return True
+
+    def save_crt(self, data, log=print):
+        """Write edited Templates.CRT (hint panel text) with a pristine backup."""
+        if not self.crt_path:
+            return False
+        rel = os.path.relpath(self.crt_path, self.work)
+        dest = os.path.join(self.work, '_backup', rel)
+        if not os.path.exists(dest):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(self.crt_path, dest)
+        with open(self.crt_path, 'wb') as f:
+            f.write(data)
+        self.crt_dirty = False
+        log('saved %s (%d bytes)' % (self.crt_path, len(data)))
         return True
 
 

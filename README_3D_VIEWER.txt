@@ -106,6 +106,23 @@ Properties field "Points to path".  This writes the path's hash into the
 record's `sent` field (FFFFFFFF when "None" is selected).  Save writes Objects.LP
 and, if names changed, CodeStrings.CHR.
 
+Hint panels
+-----------
+Select a Help Hint Panel (a `STR_HINT*` placement, e.g. in Fort Knox) and the
+Properties panel shows a "Hint panel text" group.  The message is not stored in
+the level: it is the Nth text in the hint block of `Templates.CRT`.  Edit it and
+press "Apply hint text" to write Templates.CRT immediately (the first write
+keeps a pristine copy in `<work>/_backup`).  The message is written **in place**
+and padded with spaces to the slot's original byte length; the panel shows the
+maximum length.  Templates.CRT contains offset tables that index the text by
+character position, so changing a hint's length would shift and corrupt other
+level/menu text — longer messages are rejected instead.  Repack the ROM to
+test the change in the game.
+
+When you add a new Help Hint Panel with the Objects tab's Add button, it is
+automatically named `STR_HINT<n>` using the next free number (1-19), so its text
+can be edited straight away.
+
 If a model is missing or wrong, pick the correct one in the Properties panel;
 overrides are saved in viewer3d_data\_viewer3d_overrides.json (next to
 pandora_editor.py) and always win.
